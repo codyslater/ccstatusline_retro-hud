@@ -1,4 +1,4 @@
-# retro-hud
+# 🎮 retro-hud
 
 A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude-code).
 
