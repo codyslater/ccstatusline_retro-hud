@@ -332,14 +332,19 @@ if show_dur:
     r2_budget -= _seg_dur
 show_agent = r2_budget >= _seg_agent
 
+_RL_5H_FC = "\033[1;38;5;33m"
+_RL_5H_EC = "\033[38;5;17m"
+_RL_7D_FC = "\033[1;38;5;135m"
+_RL_7D_EC = "\033[38;5;54m"
+
 row2 = (
     f"{BL}{H}"
     f"{ctx_bar(ctx_pct, ctx_bar_len)}"
     f"{SEP}{tok_bar(in_tok, out_tok, tok_bar_len)}"
-    f"{SEP}{rate_mirror(rl_5h_pct, rl_7d_pct, tok_bar_len, '\033[1;38;5;33m', '\033[38;5;17m', '\033[1;38;5;135m', '\033[38;5;54m')}"
+    f"{SEP}{rate_mirror(rl_5h_pct, rl_7d_pct, tok_bar_len, _RL_5H_FC, _RL_5H_EC, _RL_7D_FC, _RL_7D_EC)}"
 )
 if show_dur:
-    row2 += f"{SEP}{NEON_PINK}\u23F1  {dur_str}{R}"
+    row2 += f"{SEP}{NEON_PINK}\u29D6 {dur_str}{R}"
 row2 += f"{SEP}{NEON_YEL}{cost_fmt}{R}"
 if show_agent:
     row2 += f"{SEP}{agent_display()}"
