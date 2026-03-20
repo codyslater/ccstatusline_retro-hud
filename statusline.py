@@ -73,28 +73,9 @@ def _save_cache(d):
 
 _cache = _load_cache()
 if _cache:
-    effort = _cache.get("effort", "")
     git_branch = _cache.get("git_branch", "")
     github_url = _cache.get("github_url", "")
 else:
-    # Effort level: read from project settings as fallback
-    effort = ""
-    for _settings_path in [
-        os.path.join(cwd, ".claude", "settings.local.json"),
-        os.path.join(cwd, ".claude", "settings.json"),
-        os.path.join(os.path.expanduser("~"), ".claude", "settings.local.json"),
-        os.path.join(os.path.expanduser("~"), ".claude", "settings.json"),
-    ]:
-        if os.path.isfile(_settings_path):
-            try:
-                with open(_settings_path) as _f:
-                    _s = json.load(_f)
-                if "effortLevel" in _s:
-                    effort = _s["effortLevel"]
-                    break
-            except Exception:
-                pass
-
     # ── git branch + remote URL (single subprocess) ──
     git_branch = ""
     github_url = ""
@@ -127,18 +108,15 @@ else:
     except Exception:
         pass
 
-    _save_cache({"effort": effort, "git_branch": git_branch, "github_url": github_url})
-
-# Session-level effort from JSON input overrides settings file/cache
-_json_effort = data.get("output_style", {}).get("name", "")
-if _json_effort and _json_effort != "default":
-    effort = _json_effort
+    _save_cache({"git_branch": git_branch, "github_url": github_url})
 
 
 # ── duration formatting ──
 dur_min = dur_ms // 60000
 dur_sec = (dur_ms % 60000) // 1000
-if dur_min > 0:
+if dur_min >= 60:
+    dur_str = f"{dur_min // 60}h{dur_min % 60:02d}m"
+elif dur_min > 0:
     dur_str = f"{dur_min}m"
 else:
     dur_str = f"{dur_sec}s"
@@ -180,21 +158,8 @@ def trunc(s, maxw):
         return s[:maxw]
     return s[:maxw-2] + ".." if len(s) > maxw else s
 
-def effort_bar(level):
-    level = (level or "").lower()
-    if level == "low":
-        return f"\033[1;38;5;46m\u00B7{R}"
-    elif level == "medium":
-        return f"\033[1;38;5;208m\u2022{R}"
-    elif level == "high":
-        return f"\033[1;38;5;196m\u25CF{R}"
-    elif level == "max":
-        return f"\033[1;38;5;196m\u2B24{R}"
-    return ""
-
-def model_box(name, eff_level):
-    ebar = effort_bar(eff_level)
-    return f"{MODEL_BOX}[{R}{ebar} {MODEL_TXT}{name} {R}{MODEL_BOX}]{R}"
+def model_box(name):
+    return f"{MODEL_BOX}[{R} {MODEL_TXT}{name} {R}{MODEL_BOX}]{R}"
 
 def ctx_bar(pct, bar_len):
     if pct < 70:
@@ -305,7 +270,7 @@ if t_branch:
     branch_part = f"{SEP}{BRANCH_BADGE} \u2387 {link(github_url, t_branch)} {R}"
 
 row1 = (
-    f"{TL}{H}{model_box(model, effort)}"
+    f"{TL}{H}{model_box(model)}"
     f"{SEP}{NEON_WHT}\U0001F4C2 {t_dir}{R}"
     f"{branch_part}"
 )
@@ -319,7 +284,7 @@ _seg_ctx = ctx_bar_len + 1 + len(str(ctx_pct)) + 1
 _seg_tok = tok_bar_len + 1 + len(fmt_tok(in_tok + out_tok))
 _seg_rl = len(str(rl_5h_pct)) + 2 + tok_bar_len + 1 + tok_bar_len + 1 + len(str(rl_7d_pct)) + 1  # pct% bar|bar pct%
 _seg_agent = vwidth(agent_name or "\u2504\u2504\u2504") + (4 if agent_name else 0) + SEP_PLAIN_LEN
-_seg_dur = vwidth("\u23F1") + 2 + vwidth(dur_str) + SEP_PLAIN_LEN  # ⏱  dur
+_seg_dur = 2 + vwidth(dur_str) + SEP_PLAIN_LEN  # T: + dur
 _seg_cost = vwidth(cost_fmt) + SEP_PLAIN_LEN
 
 # Core row 2 = "└─" + ctx // tok // rate_mirror // cost (always shown)
@@ -344,7 +309,7 @@ row2 = (
     f"{SEP}{rate_mirror(rl_5h_pct, rl_7d_pct, tok_bar_len, _RL_5H_FC, _RL_5H_EC, _RL_7D_FC, _RL_7D_EC)}"
 )
 if show_dur:
-    row2 += f"{SEP}{NEON_PINK}\u29D6 {dur_str}{R}"
+    row2 += f"{SEP}{NEON_PINK}T:{dur_str}{R}"
 row2 += f"{SEP}{NEON_YEL}{cost_fmt}{R}"
 if show_agent:
     row2 += f"{SEP}{agent_display()}"
