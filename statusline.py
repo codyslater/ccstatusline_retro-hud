@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Claude Code statusLine — RETRO SCI-FI HUD
-Row 1: ┌─[ MODEL ] >> session // [] dir // ⎇ branch
-Row 2: └─ ████░░░░ XX% // $COST // T: dur // agents
-Dynamic sizing: natural widths if fits, else truncate to 3/4 screen.
+Single-line or two-line layout with width-aware truncation.
 """
-import json, os, re, shutil, subprocess, sys
+import json, os, re, shutil, subprocess, sys, time
+
+# Ensure git is findable regardless of Claude Code's PATH
+os.environ.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin:" + os.environ.get("PATH", ""))
 
 data = json.load(sys.stdin)
 
@@ -38,48 +39,107 @@ model = data.get("model", {}).get("display_name") or data.get("model", {}).get("
 ctx_pct = int(data.get("context_window", {}).get("used_percentage") or 0)
 cost = float(data.get("cost", {}).get("total_cost_usd") or 0)
 dur_ms = int(data.get("cost", {}).get("total_duration_ms") or 0)
-effort = data.get("output_style", {}).get("name", "")
-session_name = data.get("session_name", "")
-
+in_tok = int(data.get("context_window", {}).get("total_input_tokens") or 0)
+out_tok = int(data.get("context_window", {}).get("total_output_tokens") or 0)
 agent_name = data.get("agent", {}).get("name", "")
 worktree = data.get("worktree", {}).get("name", "")
+# Rate limits (5-hour and 7-day windows)
+_rl = data.get("rate_limits", {})
+rl_5h_pct = int(_rl.get("five_hour", {}).get("used_percentage") or 0)
+rl_7d_pct = int(_rl.get("seven_day", {}).get("used_percentage") or 0)
 
-# ── git branch + remote URL ──
-git_branch = ""
-github_url = ""
-try:
-    git_branch = subprocess.check_output(
-        ["git", "-C", cwd, "symbolic-ref", "--short", "HEAD"],
-        stderr=subprocess.DEVNULL, text=True
-    ).strip()
-except Exception:
+# ── cache for slow lookups (git subprocesses, settings file reads) ──
+_CACHE_FILE = os.path.join(os.path.expanduser("~"), ".claude", ".statusline_cache.json")
+_CACHE_TTL = 30  # seconds
+
+def _load_cache():
     try:
-        git_branch = subprocess.check_output(
-            ["git", "-C", cwd, "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL, text=True
-        ).strip()
+        with open(_CACHE_FILE) as f:
+            c = json.load(f)
+        if time.time() - c.get("ts", 0) < _CACHE_TTL and c.get("cwd") == cwd:
+            return c
+    except Exception:
+        pass
+    return None
+
+def _save_cache(d):
+    d["ts"] = time.time()
+    d["cwd"] = cwd
+    try:
+        with open(_CACHE_FILE, "w") as f:
+            json.dump(d, f)
     except Exception:
         pass
 
-if git_branch:
+_cache = _load_cache()
+if _cache:
+    effort = _cache.get("effort", "")
+    git_branch = _cache.get("git_branch", "")
+    github_url = _cache.get("github_url", "")
+else:
+    # Effort level: read from project settings as fallback
+    effort = ""
+    for _settings_path in [
+        os.path.join(cwd, ".claude", "settings.local.json"),
+        os.path.join(cwd, ".claude", "settings.json"),
+        os.path.join(os.path.expanduser("~"), ".claude", "settings.local.json"),
+        os.path.join(os.path.expanduser("~"), ".claude", "settings.json"),
+    ]:
+        if os.path.isfile(_settings_path):
+            try:
+                with open(_settings_path) as _f:
+                    _s = json.load(_f)
+                if "effortLevel" in _s:
+                    effort = _s["effortLevel"]
+                    break
+            except Exception:
+                pass
+
+    # ── git branch + remote URL (single subprocess) ──
+    git_branch = ""
+    github_url = ""
+    _git_env = {
+        **os.environ,
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "safe.directory",
+        "GIT_CONFIG_VALUE_0": "*",
+    }
     try:
-        remote = subprocess.check_output(
-            ["git", "-C", cwd, "remote", "get-url", "origin"],
-            stderr=subprocess.DEVNULL, text=True
+        _git_out = subprocess.check_output(
+            ["sh", "-c",
+             'cd "$1" && '
+             '{ git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null; } && '
+             'git remote get-url origin 2>/dev/null || true',
+             "--", cwd],
+            stderr=subprocess.DEVNULL, universal_newlines=True, env=_git_env
         ).strip()
-        m = re.match(r"git@github\.com:(.+?)(?:\.git)?$", remote)
-        if not m:
-            m = re.match(r"https?://github\.com/(.+?)(?:\.git)?$", remote)
-        if m:
-            github_url = f"https://github.com/{m.group(1)}/tree/{git_branch}"
+        _lines = _git_out.splitlines()
+        if _lines:
+            git_branch = _lines[0].strip()
+        if len(_lines) >= 2:
+            remote = _lines[1].strip()
+            m = re.match(r"git@github\.com:(.+?)(?:\.git)?$", remote)
+            if not m:
+                m = re.match(r"https?://github\.com/(.+?)(?:\.git)?$", remote)
+            if m:
+                github_url = f"https://github.com/{m.group(1)}/tree/{git_branch}"
     except Exception:
         pass
+
+    _save_cache({"effort": effort, "git_branch": git_branch, "github_url": github_url})
+
+# Session-level effort from JSON input overrides settings file/cache
+_json_effort = data.get("output_style", {}).get("name", "")
+if _json_effort and _json_effort != "default":
+    effort = _json_effort
+
 
 # ── duration formatting ──
 dur_min = dur_ms // 60000
 dur_sec = (dur_ms % 60000) // 1000
 if dur_min > 0:
-    dur_str = f"{dur_min}m{dur_sec:02d}s"
+    dur_str = f"{dur_min}m"
 else:
     dur_str = f"{dur_sec}s"
 
@@ -87,25 +147,114 @@ else:
 dir_name = os.path.basename(cwd) or cwd
 
 # ── helpers ──
+import unicodedata
+
+def vwidth(s):
+    """Visible width accounting for double-width chars (emoji, CJK)."""
+    w = 0
+    for ch in s:
+        cat = unicodedata.east_asian_width(ch)
+        w += 2 if cat in ("W", "F") else 1
+    return w
+
+_FULL = "\u2588"
+_EMPTY = "\u2591"
+_FRAC = ["", "\u258F", "\u258E", "\u258D", "\u258C", "\u258B", "\u258A", "\u2589"]
+
+def bar_fill(pct, bar_len, fill_color, empty_color):
+    units = pct * bar_len * 8 // 100
+    full = units // 8
+    frac = units % 8
+    empty = bar_len - full - (1 if frac else 0)
+    parts = f"{fill_color}{_FULL * full}"
+    if frac:
+        # Convert empty_color from fg (38;5;X) to bg (48;5;X) for seamless fill
+        bg = empty_color.replace("38;5;", "48;5;")
+        parts += f"{bg}{_FRAC[frac]}"
+    bg = empty_color.replace("38;5;", "48;5;")
+    parts += f"{R}{bg}{' ' * empty}{R}"
+    return parts
+
 def trunc(s, maxw):
     if maxw <= 2:
         return s[:maxw]
     return s[:maxw-2] + ".." if len(s) > maxw else s
 
-def model_box(name):
-    return f"{MODEL_BOX}[{R}{MODEL_TXT} {name} {R}{MODEL_BOX}]{R}"
+def effort_bar(level):
+    level = (level or "").lower()
+    if level == "low":
+        return f"\033[1;38;5;46m\u00B7{R}"
+    elif level == "medium":
+        return f"\033[1;38;5;208m\u2022{R}"
+    elif level == "high":
+        return f"\033[1;38;5;196m\u25CF{R}"
+    elif level == "max":
+        return f"\033[1;38;5;196m\u2B24{R}"
+    return ""
+
+def model_box(name, eff_level):
+    ebar = effort_bar(eff_level)
+    return f"{MODEL_BOX}[{R}{ebar} {MODEL_TXT}{name} {R}{MODEL_BOX}]{R}"
 
 def ctx_bar(pct, bar_len):
-    filled = pct * bar_len // 100
-    empty = bar_len - filled
     if pct < 70:
         color = NEON_GREEN
     elif pct < 90:
         color = NEON_ORG
     else:
         color = NEON_RED
-    bar = "\u2588" * filled + "\u2591" * empty
-    return f"{color}{bar} {pct}%{R}"
+    return f"{bar_fill(pct, bar_len, color, chr(27) + '[38;5;22m')} {color}{pct}%{R}"
+
+def fmt_tok(n):
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+def tok_bar(inp, out, bar_len):
+    total = inp + out
+    if total == 0:
+        return f"{DIM}{_EMPTY * bar_len}{R}"
+    in_fill = max(round(inp / total * bar_len), 1 if inp else 0)
+    out_fill = bar_len - in_fill
+    return f"{NEON_CYAN}{_FULL * in_fill}{R}{NEON_YEL}{_FULL * out_fill}{R} {NEON_WHT}{fmt_tok(total)}{R}"
+
+def rate_bar(pct, bar_len, fill_color, empty_color):
+    if pct >= 90:
+        fill_color = NEON_RED
+    elif pct >= 70:
+        fill_color = NEON_ORG
+    return f"{bar_fill(pct, bar_len, fill_color, empty_color)} {fill_color}{pct}%{R}"
+
+_FRAC_R = ["", "\u2595", "\u2590"]  # right 1/8, right 1/2 (limited Unicode)
+
+def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d):
+    if pct_5h >= 90: fc_5h = NEON_RED
+    elif pct_5h >= 70: fc_5h = NEON_ORG
+    if pct_7d >= 90: fc_7d = NEON_RED
+    elif pct_7d >= 70: fc_7d = NEON_ORG
+    bg_5h = ec_5h.replace("38;5;", "48;5;")
+    bg_7d = ec_7d.replace("38;5;", "48;5;")
+    # 5h: fills right-to-left using left-side fractional blocks (visually reversed)
+    units_5h = pct_5h * bar_len * 8 // 100
+    full_5h = units_5h // 8
+    frac_5h = units_5h % 8
+    empty_5h = bar_len - full_5h - (1 if frac_5h else 0)
+    left = f"{fc_5h}{pct_5h}%{R} {bg_5h}{' ' * empty_5h}{R}"
+    if frac_5h:
+        left += f"{bg_5h}{fc_5h}{_FRAC[frac_5h]}{R}"
+    left += f"{fc_5h}{_FULL * full_5h}{R}"
+    # 7d: fills left-to-right (standard direction)
+    units_7d = pct_7d * bar_len * 8 // 100
+    full_7d = units_7d // 8
+    frac_7d = units_7d % 8
+    empty_7d = bar_len - full_7d - (1 if frac_7d else 0)
+    right = f"{fc_7d}{_FULL * full_7d}{R}"
+    if frac_7d:
+        right += f"{bg_7d}{fc_7d}{_FRAC[frac_7d]}{R}"
+    right += f"{bg_7d}{' ' * empty_7d}{R} {fc_7d}{pct_7d}%{R}"
+    return f"{left}{DIM}|{R}{right}"
 
 def link(url, text):
     if url:
@@ -122,73 +271,78 @@ def agent_display():
         return f"{DIM}\u2504\u2504\u2504{R}"
     return " ".join(parts)
 
-# ── compute natural (untruncated) visible lengths ──
-# Row 1 fields: "┌─" + "[ model ]" + " >> session" + " // [] dir" + " // ⎇ branch "
-r1_model_len = len(model) + 4        # "[ model ]"
-r1_session_len = len(f">> {session_name}") if session_name else 0
-r1_dir_len = len(f"[] {dir_name}")
-r1_branch_len = len(f"\u2387 {git_branch} ") if git_branch else 0
+# ── dynamic sizing ──
+r1_model_len = vwidth(model) + 4
+r1_dir_len = vwidth("\U0001F4C2") + 1 + vwidth(dir_name)  # 📂 + space + dir
+r1_branch_len = vwidth(f"\u2387 {git_branch} ") if git_branch else 0
 
 r1_fixed = 2  # "┌─"
-r1_seps = sum(1 for x in [True, session_name, True, git_branch] if x) - 1
-r1_natural = r1_fixed + r1_model_len + r1_session_len + r1_dir_len + r1_branch_len + r1_seps * SEP_PLAIN_LEN
+r1_seps = sum(1 for x in [True, True, git_branch] if x) - 1
+r1_natural = r1_fixed + r1_model_len + r1_dir_len + r1_branch_len + r1_seps * SEP_PLAIN_LEN
 
-# Row 2 fields: "└─" + bar + " // $X.XX" + " // T: Xm00s" + " // agents"
-r2_cost_len = len(f"${cost:.2f}")
-r2_dur_len = len(f"T: {dur_str}")
-r2_agent_text = agent_name or "\u2504\u2504\u2504"
-r2_agent_len = len(r2_agent_text) + (4 if agent_name else 0)  # icon + space
-
-# ── dynamic sizing ──
-# If everything fits naturally in COLS, use natural widths.
-# Otherwise, allocate 3/4 of COLS and shrink flexible fields proportionally.
-
-# Row 1: flexible fields are session, dir, branch
 if r1_natural <= COLS:
-    # Everything fits — use natural sizes
-    t_session = session_name
     t_dir = dir_name
     t_branch = git_branch
 else:
-    budget = int(COLS * 0.75) - r1_fixed - r1_model_len - r1_seps * SEP_PLAIN_LEN - 8  # 8 for prefixes (>> [] ⎇ )
-    # Distribute budget: session 20%, dir 35%, branch 45%
+    budget = int(COLS * 0.75) - r1_fixed - r1_model_len - r1_seps * SEP_PLAIN_LEN - 6
     if budget > 0:
-        w_ses = max(budget * 20 // 100, 3) if session_name else 0
-        w_dir = max(budget * 35 // 100, 5)
-        w_br  = max(budget * 45 // 100, 5) if git_branch else 0
-        t_session = trunc(session_name, w_ses) if session_name else ""
+        w_dir = max(budget * 40 // 100, 5)
+        w_br  = max(budget * 60 // 100, 5) if git_branch else 0
         t_dir = trunc(dir_name, w_dir)
         t_branch = trunc(git_branch, w_br) if git_branch else ""
     else:
-        t_session = trunc(session_name, 4) if session_name else ""
         t_dir = trunc(dir_name, 6)
         t_branch = trunc(git_branch, 6) if git_branch else ""
 
-bar_len = max(COLS // 8, 5)
+# ── bar sizes ──
+ctx_bar_len = max(COLS // 24, 2)
+bar_len = max(COLS // 32, 2)
+tok_bar_len = bar_len
 
-# ── render row 1 ──
+# ── build row 1 ──
 branch_part = ""
 if t_branch:
     branch_part = f"{SEP}{BRANCH_BADGE} \u2387 {link(github_url, t_branch)} {R}"
 
-session_part = ""
-if t_session:
-    session_part = f" {NEON_RED}>> {t_session}{R}"
-
-print(
-    f"{TL}{H}{model_box(model)}"
-    f"{session_part}"
-    f"{SEP}{NEON_WHT}[] {t_dir}{R}"
+row1 = (
+    f"{TL}{H}{model_box(model, effort)}"
+    f"{SEP}{NEON_WHT}\U0001F4C2 {t_dir}{R}"
     f"{branch_part}"
 )
 
-# ── render row 2 ──
+# ── build row 2 with progressive width-aware truncation ──
 cost_fmt = f"${cost:.2f}"
 
-print(
-    f"{BL}{H}{ctx_bar(ctx_pct, bar_len)}"
-    f"{SEP}{NEON_YEL}{cost_fmt}{R}"
-    f"{SEP}{NEON_PINK}T: {dur_str}{R}"
-    f"{SEP}{agent_display()}",
-    end=""
+# Visible lengths of each segment
+# ctx_bar: bar + space + pct%  |  tok_bar: bar + space + total  |  rate_mirror: pct% + space + bar + | + bar + space + pct%
+_seg_ctx = ctx_bar_len + 1 + len(str(ctx_pct)) + 1
+_seg_tok = tok_bar_len + 1 + len(fmt_tok(in_tok + out_tok))
+_seg_rl = len(str(rl_5h_pct)) + 2 + tok_bar_len + 1 + tok_bar_len + 1 + len(str(rl_7d_pct)) + 1  # pct% bar|bar pct%
+_seg_agent = vwidth(agent_name or "\u2504\u2504\u2504") + (4 if agent_name else 0) + SEP_PLAIN_LEN
+_seg_dur = vwidth("\u23F1") + 2 + vwidth(dur_str) + SEP_PLAIN_LEN  # ⏱  dur
+_seg_cost = vwidth(cost_fmt) + SEP_PLAIN_LEN
+
+# Core row 2 = "└─" + ctx // tok // rate_mirror // cost (always shown)
+r2_core = 2 + _seg_ctx + SEP_PLAIN_LEN + _seg_tok + SEP_PLAIN_LEN + _seg_rl + SEP_PLAIN_LEN + _seg_cost
+r2_budget = COLS - r2_core
+
+# Progressively add optional segments in priority order: duration > agent
+show_dur = r2_budget >= _seg_dur
+if show_dur:
+    r2_budget -= _seg_dur
+show_agent = r2_budget >= _seg_agent
+
+row2 = (
+    f"{BL}{H}"
+    f"{ctx_bar(ctx_pct, ctx_bar_len)}"
+    f"{SEP}{tok_bar(in_tok, out_tok, tok_bar_len)}"
+    f"{SEP}{rate_mirror(rl_5h_pct, rl_7d_pct, tok_bar_len, '\033[1;38;5;33m', '\033[38;5;17m', '\033[1;38;5;135m', '\033[38;5;54m')}"
 )
+if show_dur:
+    row2 += f"{SEP}{NEON_PINK}\u23F1  {dur_str}{R}"
+row2 += f"{SEP}{NEON_YEL}{cost_fmt}{R}"
+if show_agent:
+    row2 += f"{SEP}{agent_display()}"
+
+print(row1)
+print(row2, end="")
