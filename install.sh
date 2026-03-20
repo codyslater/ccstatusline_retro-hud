@@ -37,7 +37,7 @@ PYEOF
         echo '  "statusLine": {"type": "command", "command": "bash ~/.claude/statusline-command.sh"}'
     fi
 else
-    cat > "$SETTINGS" << 'EOF'
+    cat > "$SETTINGS" <<'EOF'
 {
   "statusLine": {
     "type": "command",
