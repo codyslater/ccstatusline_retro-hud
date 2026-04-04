@@ -206,9 +206,17 @@ def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d):
     full_5h = units_5h // 8
     frac_5h = units_5h % 8
     empty_5h = bar_len - full_5h - (1 if frac_5h else 0)
-    left = f"{fc_5h}{pct_5h}%{R} {bg_5h}{' ' * empty_5h}{R}"
+    left = f"{fc_5h}{pct_5h}%{R} {bg_5h}{' ' * empty_5h}"
     if frac_5h:
-        left += f"{bg_5h}{fc_5h}{_FRAC[frac_5h]}{R}"
+        # Right-to-left: use native right-side blocks (fill fg, empty bg — no color swap)
+        if frac_5h <= 2:
+            left += f"{fc_5h}\u2595{R}"   # RIGHT 1/8 BLOCK ▕
+        elif frac_5h <= 5:
+            left += f"{fc_5h}\u2590{R}"   # RIGHT HALF BLOCK ▐
+        else:
+            left += f"{fc_5h}{_FULL}{R}"  # nearly full → full block
+    else:
+        left += f"{R}"
     left += f"{fc_5h}{_FULL * full_5h}{R}"
     # 7d: fills left-to-right (standard direction)
     units_7d = pct_7d * bar_len * 8 // 100
