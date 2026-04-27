@@ -192,31 +192,25 @@ def rate_bar(pct, bar_len, fill_color, empty_color):
         fill_color = NEON_ORG
     return f"{bar_fill(pct, bar_len, fill_color, empty_color)} {fill_color}{pct}%{R}"
 
-_FRAC_R = ["", "\u2595", "\u2590"]  # right 1/8, right 1/2 (limited Unicode)
-
 def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d):
     if pct_5h >= 90: fc_5h = NEON_RED
     elif pct_5h >= 70: fc_5h = NEON_ORG
     if pct_7d >= 90: fc_7d = NEON_RED
     elif pct_7d >= 70: fc_7d = NEON_ORG
     bg_5h = ec_5h.replace("38;5;", "48;5;")
+    # Bright fc as bg for 5h partial cell (strip bold; bold doesn't apply to bg)
+    bg_fc_5h = fc_5h.replace("1;38;5;", "48;5;").replace("38;5;", "48;5;")
     bg_7d = ec_7d.replace("38;5;", "48;5;")
-    # 5h: fills right-to-left using left-side fractional blocks (visually reversed)
+    # 5h: fills right-to-left. Mirror the 7d gradient by drawing a left-side block
+    # with swapped colors (bright bg, dark fg) so the visible fill sits on the
+    # cell's right edge — adjacent to the full blocks, with no gap between.
     units_5h = pct_5h * bar_len * 8 // 100
     full_5h = units_5h // 8
     frac_5h = units_5h % 8
     empty_5h = bar_len - full_5h - (1 if frac_5h else 0)
-    left = f"{fc_5h}{pct_5h}%{R} {bg_5h}{' ' * empty_5h}"
+    left = f"{fc_5h}{pct_5h}%{R} {bg_5h}{' ' * empty_5h}{R}"
     if frac_5h:
-        # Right-to-left: use native right-side blocks (fill fg, empty bg — no color swap)
-        if frac_5h <= 2:
-            left += f"{fc_5h}\u2595{R}"   # RIGHT 1/8 BLOCK ▕
-        elif frac_5h <= 5:
-            left += f"{fc_5h}\u2590{R}"   # RIGHT HALF BLOCK ▐
-        else:
-            left += f"{fc_5h}{_FULL}{R}"  # nearly full → full block
-    else:
-        left += f"{R}"
+        left += f"{bg_fc_5h}{ec_5h}{_FRAC[8 - frac_5h]}{R}"
     left += f"{fc_5h}{_FULL * full_5h}{R}"
     # 7d: fills left-to-right (standard direction)
     units_7d = pct_7d * bar_len * 8 // 100
