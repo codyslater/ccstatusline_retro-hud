@@ -47,6 +47,11 @@ worktree = data.get("worktree", {}).get("name", "")
 _rl = data.get("rate_limits", {})
 rl_5h_pct = int(_rl.get("five_hour", {}).get("used_percentage") or 0)
 rl_7d_pct = int(_rl.get("seven_day", {}).get("used_percentage") or 0)
+rl_5h_reset = int(_rl.get("five_hour", {}).get("resets_at") or 0)
+rl_7d_reset = int(_rl.get("seven_day", {}).get("resets_at") or 0)
+_now = int(time.time())
+rl_5h_left = max(rl_5h_reset - _now, 0) if rl_5h_reset else 0
+rl_7d_left = max(rl_7d_reset - _now, 0) if rl_7d_reset else 0
 
 # ── cache for slow lookups (git subprocesses, settings file reads) ──
 _CACHE_FILE = os.path.join(os.path.expanduser("~"), ".claude", ".statusline_cache.json")
@@ -177,6 +182,22 @@ def fmt_tok(n):
         return f"{n / 1_000:.1f}K"
     return str(n)
 
+def fmt_countdown(secs, has_reset):
+    if not has_reset:
+        return "--"
+    if secs <= 0:
+        return "0m"
+    if secs >= 86400:
+        d, rem = divmod(secs, 86400)
+        h = rem // 3600
+        return f"{d}d{h}h" if h else f"{d}d"
+    if secs >= 3600:
+        h, rem = divmod(secs, 3600)
+        m = rem // 60
+        return f"{h}h{m:02d}m" if m else f"{h}h"
+    m = max(secs // 60, 1)
+    return f"{m}m"
+
 def tok_bar(inp, out, bar_len):
     total = inp + out
     if total == 0:
@@ -192,7 +213,7 @@ def rate_bar(pct, bar_len, fill_color, empty_color):
         fill_color = NEON_ORG
     return f"{bar_fill(pct, bar_len, fill_color, empty_color)} {fill_color}{pct}%{R}"
 
-def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d):
+def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d, lbl_5h, lbl_7d):
     if pct_5h >= 90: fc_5h = NEON_RED
     elif pct_5h >= 70: fc_5h = NEON_ORG
     if pct_7d >= 90: fc_7d = NEON_RED
@@ -208,7 +229,7 @@ def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d):
     full_5h = units_5h // 8
     frac_5h = units_5h % 8
     empty_5h = bar_len - full_5h - (1 if frac_5h else 0)
-    left = f"{fc_5h}{pct_5h}%{R} {bg_5h}{' ' * empty_5h}{R}"
+    left = f"{fc_5h}{lbl_5h}{R} {bg_5h}{' ' * empty_5h}{R}"
     if frac_5h:
         left += f"{bg_fc_5h}{ec_5h}{_FRAC[8 - frac_5h]}{R}"
     left += f"{fc_5h}{_FULL * full_5h}{R}"
@@ -220,7 +241,7 @@ def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d):
     right = f"{fc_7d}{_FULL * full_7d}{R}"
     if frac_7d:
         right += f"{bg_7d}{fc_7d}{_FRAC[frac_7d]}{R}"
-    right += f"{bg_7d}{' ' * empty_7d}{R} {fc_7d}{pct_7d}%{R}"
+    right += f"{bg_7d}{' ' * empty_7d}{R} {fc_7d}{lbl_7d}{R}"
     return f"{left}{DIM}|{R}{right}"
 
 def link(url, text):
@@ -284,7 +305,10 @@ cost_fmt = f"${cost:.2f}"
 # ctx_bar: bar + space + pct%  |  tok_bar: bar + space + total  |  rate_mirror: pct% + space + bar + | + bar + space + pct%
 _seg_ctx = ctx_bar_len + 1 + len(str(ctx_pct)) + 1
 _seg_tok = tok_bar_len + 1 + len(fmt_tok(in_tok + out_tok))
-_seg_rl = len(str(rl_5h_pct)) + 2 + tok_bar_len + 1 + tok_bar_len + 1 + len(str(rl_7d_pct)) + 1  # pct% bar|bar pct%
+_lbl_5h = fmt_countdown(rl_5h_left, bool(rl_5h_reset))
+_lbl_7d = fmt_countdown(rl_7d_left, bool(rl_7d_reset))
+# rate_mirror: lbl + space + bar + | + bar + space + lbl
+_seg_rl = vwidth(_lbl_5h) + 1 + tok_bar_len + 1 + tok_bar_len + 1 + vwidth(_lbl_7d)
 _seg_agent = vwidth(agent_name or "\u2504\u2504\u2504") + (4 if agent_name else 0) + SEP_PLAIN_LEN
 _seg_dur = 2 + vwidth(dur_str) + SEP_PLAIN_LEN  # T: + dur
 _seg_cost = vwidth(cost_fmt) + SEP_PLAIN_LEN
@@ -308,7 +332,7 @@ row2 = (
     f"{BL}{H}"
     f"{ctx_bar(ctx_pct, ctx_bar_len)}"
     f"{SEP}{tok_bar(in_tok, out_tok, tok_bar_len)}"
-    f"{SEP}{rate_mirror(rl_5h_pct, rl_7d_pct, tok_bar_len, _RL_5H_FC, _RL_5H_EC, _RL_7D_FC, _RL_7D_EC)}"
+    f"{SEP}{rate_mirror(rl_5h_pct, rl_7d_pct, tok_bar_len, _RL_5H_FC, _RL_5H_EC, _RL_7D_FC, _RL_7D_EC, _lbl_5h, _lbl_7d)}"
 )
 if show_dur:
     row2 += f"{SEP}{NEON_PINK}T:{dur_str}{R}"
