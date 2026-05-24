@@ -198,6 +198,12 @@ def fmt_countdown(secs, has_reset):
     m = max(secs // 60, 1)
     return f"{m}m"
 
+def fmt_rl_label(pct, secs, has_reset, compact=False):
+    # Countdown only appears once usage crosses 75% (or in compact/no-reset cases hide entirely).
+    if compact or not has_reset or pct < 75:
+        return f"{pct}%"
+    return f"{pct}% · {fmt_countdown(secs, has_reset)}"
+
 def tok_bar(inp, out, bar_len):
     total = inp + out
     if total == 0:
@@ -255,8 +261,6 @@ def agent_display():
         parts.append(f"{NEON_CYAN}\u2590\u2588{R} {NEON_WHT}{agent_name}{R}")
     if worktree:
         parts.append(f"{NEON_PINK}\u2387 {worktree}{R}")
-    if not parts:
-        return f"{DIM}\u2504\u2504\u2504{R}"
     return " ".join(parts)
 
 # ── dynamic sizing ──
@@ -282,9 +286,9 @@ else:
         t_dir = trunc(dir_name, 6)
         t_branch = trunc(git_branch, 6) if git_branch else ""
 
-# ── bar sizes ──
-ctx_bar_len = max(COLS // 24, 2)
-bar_len = max(COLS // 32, 2)
+# ── bar sizes (all bars same width) ──
+bar_len = max(COLS // 72, 2)
+ctx_bar_len = bar_len
 tok_bar_len = bar_len
 
 # ── build row 1 ──
@@ -305,13 +309,35 @@ cost_fmt = f"${cost:.2f}"
 # ctx_bar: bar + space + pct%  |  tok_bar: bar + space + total  |  rate_mirror: pct% + space + bar + | + bar + space + pct%
 _seg_ctx = ctx_bar_len + 1 + len(str(ctx_pct)) + 1
 _seg_tok = tok_bar_len + 1 + len(fmt_tok(in_tok + out_tok))
-_lbl_5h = fmt_countdown(rl_5h_left, bool(rl_5h_reset))
-_lbl_7d = fmt_countdown(rl_7d_left, bool(rl_7d_reset))
-# rate_mirror: lbl + space + bar + | + bar + space + lbl
-_seg_rl = vwidth(_lbl_5h) + 1 + tok_bar_len + 1 + tok_bar_len + 1 + vwidth(_lbl_7d)
-_seg_agent = vwidth(agent_name or "\u2504\u2504\u2504") + (4 if agent_name else 0) + SEP_PLAIN_LEN
+_lbl_5h_rich = fmt_rl_label(rl_5h_pct, rl_5h_left, bool(rl_5h_reset))
+_lbl_7d_rich = fmt_rl_label(rl_7d_pct, rl_7d_left, bool(rl_7d_reset))
+_lbl_5h_compact = fmt_rl_label(rl_5h_pct, rl_5h_left, bool(rl_5h_reset), compact=True)
+_lbl_7d_compact = fmt_rl_label(rl_7d_pct, rl_7d_left, bool(rl_7d_reset), compact=True)
+
+def _rl_seg_width(l5, l7):
+    # rate_mirror: lbl + space + bar + | + bar + space + lbl
+    return vwidth(l5) + 1 + tok_bar_len + 1 + tok_bar_len + 1 + vwidth(l7)
+
+_has_agent_info = bool(agent_name or worktree)
+if _has_agent_info:
+    _seg_agent = (
+        (vwidth(agent_name) + 3 if agent_name else 0)  # "\u2590\u2588 name"
+        + (vwidth(worktree) + 2 if worktree else 0)    # "\u2387 name"
+        + (1 if agent_name and worktree else 0)        # join space
+        + SEP_PLAIN_LEN
+    )
+else:
+    _seg_agent = 0
 _seg_dur = 2 + vwidth(dur_str) + SEP_PLAIN_LEN  # T: + dur
 _seg_cost = vwidth(cost_fmt) + SEP_PLAIN_LEN
+
+# Try rich rate-limit labels first ("45% · 2h30m"); fall back to compact ("45%") if too wide.
+_r2_core_fixed = 2 + _seg_ctx + SEP_PLAIN_LEN + _seg_tok + SEP_PLAIN_LEN + SEP_PLAIN_LEN + _seg_cost
+if _r2_core_fixed + _rl_seg_width(_lbl_5h_rich, _lbl_7d_rich) <= COLS:
+    _lbl_5h, _lbl_7d = _lbl_5h_rich, _lbl_7d_rich
+else:
+    _lbl_5h, _lbl_7d = _lbl_5h_compact, _lbl_7d_compact
+_seg_rl = _rl_seg_width(_lbl_5h, _lbl_7d)
 
 # Core row 2 = "└─" + ctx // tok // rate_mirror // cost (always shown)
 r2_core = 2 + _seg_ctx + SEP_PLAIN_LEN + _seg_tok + SEP_PLAIN_LEN + _seg_rl + SEP_PLAIN_LEN + _seg_cost
@@ -321,7 +347,7 @@ r2_budget = COLS - r2_core
 show_dur = r2_budget >= _seg_dur
 if show_dur:
     r2_budget -= _seg_dur
-show_agent = r2_budget >= _seg_agent
+show_agent = _has_agent_info and r2_budget >= _seg_agent
 
 _RL_5H_FC = "\033[1;38;5;33m"
 _RL_5H_EC = "\033[38;5;17m"
