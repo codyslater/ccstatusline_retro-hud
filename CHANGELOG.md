@@ -4,6 +4,16 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.4.3] — 2026-07-08
+
+### Changed
+- Documentation finalized for release: README rebuilt around a real
+  in-session screenshot with badges, segment tables (with visibility
+  conditions), the rate-limit escalation ladder, and the alien's mood
+  table; configuration, manual install, and the WSL2/VS Code width
+  troubleshooting guide moved to `docs/configuration.md`.
+- LICENSE copyright notice completed with the holder's name.
+
 ## [v2.4.2] — 2026-07-08
 
 ### Changed

@@ -29,7 +29,7 @@ cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
 "81% · 3d"; in the red zone (>=90%) it switches to time-to-reset only —
 the gauge itself already shows the saturation. "both" mode opts out.
 """
-__version__ = "2.4.2"
+__version__ = "2.4.3"
 
 import json
 import os
