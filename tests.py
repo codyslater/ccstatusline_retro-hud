@@ -143,6 +143,38 @@ class TestContent(unittest.TestCase):
         self.assertIn("---", sl.strip_ansi(rows[0]))
 
 
+class TestAlien(unittest.TestCase):
+    def test_mood_escalates_with_worst_gauge(self):
+        # FULL: worst gauge is 7d at 81% → agitated 👽
+        self.assertIn("👽", sl.strip_ansi(sl.render(copy.deepcopy(FULL), 200, NOW)[0]))
+        # MINIMAL: everything at 0 → calm 👾
+        self.assertIn("👾", sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0]))
+        # OVERLOAD: rate limit at 250% → red-zone 🛸
+        self.assertIn("🛸", sl.strip_ansi(sl.render(copy.deepcopy(OVERLOAD), 200, NOW)[0]))
+
+    def test_alien_patrols_over_time(self):
+        r1 = sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0]
+        r2 = sl.render(copy.deepcopy(MINIMAL), 200, NOW + 30)[0]
+        self.assertNotEqual(r1, r2)                    # it moved
+        self.assertEqual(sl.vislen(r1), sl.vislen(r2))  # width unchanged
+        self.assertEqual(sl.vislen(r1), 200)
+
+    def test_alien_disabled_by_env(self):
+        os.environ["RETRO_HUD_ALIEN"] = "0"
+        try:
+            plain = sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0])
+            self.assertNotIn("👾", plain)
+            self.assertTrue(plain.endswith("┐"))  # frame still closes
+        finally:
+            del os.environ["RETRO_HUD_ALIEN"]
+
+    def test_alien_skipped_on_short_track(self):
+        # A narrow terminal leaves no rule to patrol — no crash, no alien
+        plain = sl.strip_ansi(sl.render(copy.deepcopy(FULL), 60, NOW)[0])
+        for sprite in ("👾", "👽", "🛸"):
+            self.assertNotIn(sprite, plain)
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")
