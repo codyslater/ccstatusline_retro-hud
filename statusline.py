@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
 """Claude Code statusLine — RETRO SCI-FI HUD
-Single-line or two-line layout with width-aware truncation.
+
+Two-row HUD with a full wireframe, zoned gauges, and width-aware
+degradation. Reads the statusline JSON payload on stdin and prints
+two ANSI rows sized to $COLUMNS.
+
+Flags:
+    --version   print version and exit
+    --demo      render with sample data (no stdin needed)
+
+Env toggles:
+    RETRO_HUD_FRAME=0            disable the right-edge frame fill
+    RETRO_HUD_COUNTDOWN_PCT=75   rate-limit % at which reset countdowns appear
 """
-import json, os, re, shutil, subprocess, sys, time
+__version__ = "2.0.0"
 
-# Ensure git is findable regardless of Claude Code's PATH
-os.environ.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin:" + os.environ.get("PATH", ""))
-
-data = json.load(sys.stdin)
-
-COLS = shutil.get_terminal_size((100, 24)).columns
+import json
+import os
+import re
+import shutil
+import sys
+import time
+import unicodedata
 
 # ── HIGH CONTRAST sci-fi palette ──
 R = "\033[0m"
@@ -18,353 +30,553 @@ MODEL_BOX = "\033[1;38;5;46m"
 MODEL_TXT = "\033[1;38;5;231m"
 BRANCH_BADGE = "\033[1;97;48;5;129m"
 
-NEON_CYAN  = "\033[1;38;5;51m"
+NEON_CYAN = "\033[1;38;5;51m"
 NEON_GREEN = "\033[1;38;5;46m"
-NEON_YEL   = "\033[1;38;5;226m"
-NEON_RED   = "\033[1;38;5;196m"
-NEON_PINK  = "\033[1;38;5;198m"
-NEON_WHT   = "\033[1;38;5;231m"
-NEON_ORG   = "\033[1;38;5;208m"
-DIM        = "\033[38;5;240m"
+NEON_YEL = "\033[1;38;5;226m"
+NEON_RED = "\033[1;38;5;196m"
+NEON_PINK = "\033[1;38;5;198m"
+NEON_WHT = "\033[1;38;5;231m"
+NEON_ORG = "\033[1;38;5;208m"
+DIM = "\033[38;5;240m"
+RULE = "\033[38;5;28m"  # dim green frame rule
 
-TL = f"{NEON_GREEN}\u250c{R}"
-BL = f"{NEON_GREEN}\u2514{R}"
-H  = f"{NEON_GREEN}\u2500{R}"
-SEP = f" {NEON_CYAN}//{R} "
-SEP_PLAIN_LEN = 4  # " // " visible chars
+# rate-limit gauge palettes (5h blue / 7d violet)
+RL_5H_FC = "\033[1;38;5;33m"
+RL_5H_EC = "\033[38;5;17m"
+RL_7D_FC = "\033[1;38;5;135m"
+RL_7D_EC = "\033[38;5;54m"
 
-# ── extract fields ──
-cwd = data.get("workspace", {}).get("current_dir") or data.get("cwd", "~")
-model = data.get("model", {}).get("display_name") or data.get("model", {}).get("id", "---")
-ctx_pct = int(data.get("context_window", {}).get("used_percentage") or 0)
-cost = float(data.get("cost", {}).get("total_cost_usd") or 0)
-dur_ms = int(data.get("cost", {}).get("total_duration_ms") or 0)
-in_tok = int(data.get("context_window", {}).get("total_input_tokens") or 0)
-out_tok = int(data.get("context_window", {}).get("total_output_tokens") or 0)
-agent_name = data.get("agent", {}).get("name", "")
-worktree = data.get("worktree", {}).get("name", "")
-# Rate limits (5-hour and 7-day windows)
-_rl = data.get("rate_limits", {})
-rl_5h_pct = int(_rl.get("five_hour", {}).get("used_percentage") or 0)
-rl_7d_pct = int(_rl.get("seven_day", {}).get("used_percentage") or 0)
-rl_5h_reset = int(_rl.get("five_hour", {}).get("resets_at") or 0)
-rl_7d_reset = int(_rl.get("seven_day", {}).get("resets_at") or 0)
-_now = int(time.time())
-rl_5h_left = max(rl_5h_reset - _now, 0) if rl_5h_reset else 0
-rl_7d_left = max(rl_7d_reset - _now, 0) if rl_7d_reset else 0
+# context gauge zone tints (empty-cell backgrounds: green / amber / red zones)
+ZONE_EC = ("\033[38;5;22m", "\033[38;5;58m", "\033[38;5;52m")
 
-# ── cache for slow lookups (git subprocesses, settings file reads) ──
-_CACHE_FILE = os.path.join(os.path.expanduser("~"), ".claude", ".statusline_cache.json")
-_CACHE_TTL = 30  # seconds
+SEP = " " + NEON_CYAN + "//" + R + " "
 
-def _load_cache():
-    try:
-        with open(_CACHE_FILE) as f:
-            c = json.load(f)
-        if time.time() - c.get("ts", 0) < _CACHE_TTL and c.get("cwd") == cwd:
-            return c
-    except Exception:
-        pass
-    return None
+_FULL = "█"
+_FRAC = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
 
-def _save_cache(d):
-    d["ts"] = time.time()
-    d["cwd"] = cwd
-    try:
-        with open(_CACHE_FILE, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
+EFFORT_GLYPHS = {"low": "·", "medium": "•", "high": "●",
+                 "xhigh": "⬤", "max": "✦"}
+EFFORT_COLORS = {"low": DIM, "medium": NEON_CYAN, "high": NEON_YEL,
+                 "xhigh": NEON_ORG, "max": NEON_PINK}
+PR_STATE = {"approved": (NEON_GREEN, "✓"), "pending": (NEON_YEL, "○"),
+            "changes_requested": (NEON_RED, "✗"), "draft": (DIM, "◌")}
+VIM_COLORS = {"NORMAL": NEON_CYAN, "INSERT": NEON_GREEN,
+              "VISUAL": NEON_PINK, "VISUAL LINE": NEON_PINK}
 
-_cache = _load_cache()
-if _cache:
-    git_branch = _cache.get("git_branch", "")
-    github_url = _cache.get("github_url", "")
-else:
-    # ── git branch + remote URL (single subprocess) ──
-    git_branch = ""
-    github_url = ""
-    _git_env = {
-        **os.environ,
-        "GIT_OPTIONAL_LOCKS": "0",
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "safe.directory",
-        "GIT_CONFIG_VALUE_0": "*",
-    }
-    try:
-        _git_out = subprocess.check_output(
-            ["sh", "-c",
-             'cd "$1" && '
-             '{ git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null; } && '
-             'git remote get-url origin 2>/dev/null || true',
-             "--", cwd],
-            stderr=subprocess.DEVNULL, universal_newlines=True, env=_git_env
-        ).strip()
-        _lines = _git_out.splitlines()
-        if _lines:
-            git_branch = _lines[0].strip()
-        if len(_lines) >= 2:
-            remote = _lines[1].strip()
-            m = re.match(r"git@github\.com:(.+?)(?:\.git)?$", remote)
-            if not m:
-                m = re.match(r"https?://github\.com/(.+?)(?:\.git)?$", remote)
-            if m:
-                github_url = f"https://github.com/{m.group(1)}/tree/{git_branch}"
-    except Exception:
-        pass
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x07\x1b]*(?:\x07|\x1b\\)")
 
-    _save_cache({"git_branch": git_branch, "github_url": github_url})
-
-
-# ── duration formatting ──
-dur_min = dur_ms // 60000
-dur_sec = (dur_ms % 60000) // 1000
-if dur_min >= 60:
-    dur_str = f"{dur_min // 60}h{dur_min % 60:02d}m"
-elif dur_min > 0:
-    dur_str = f"{dur_min}m"
-else:
-    dur_str = f"{dur_sec}s"
-
-# ── dir name (last segment) ──
-dir_name = os.path.basename(cwd) or cwd
 
 # ── helpers ──
-import unicodedata
+def strip_ansi(s):
+    return _ANSI_RE.sub("", s)
+
 
 def vwidth(s):
     """Visible width accounting for double-width chars (emoji, CJK)."""
     w = 0
     for ch in s:
-        cat = unicodedata.east_asian_width(ch)
-        w += 2 if cat in ("W", "F") else 1
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
     return w
 
-_FULL = "\u2588"
-_EMPTY = "\u2591"
-_FRAC = ["", "\u258F", "\u258E", "\u258D", "\u258C", "\u258B", "\u258A", "\u2589"]
 
-def bar_fill(pct, bar_len, fill_color, empty_color):
-    units = pct * bar_len * 8 // 100
-    full = units // 8
-    frac = units % 8
-    empty = bar_len - full - (1 if frac else 0)
-    parts = f"{fill_color}{_FULL * full}"
-    if frac:
-        # Convert empty_color from fg (38;5;X) to bg (48;5;X) for seamless fill
-        bg = empty_color.replace("38;5;", "48;5;")
-        parts += f"{bg}{_FRAC[frac]}"
-    bg = empty_color.replace("38;5;", "48;5;")
-    parts += f"{R}{bg}{' ' * empty}{R}"
-    return parts
+def vislen(s):
+    return vwidth(strip_ansi(s))
+
 
 def trunc(s, maxw):
+    """Truncate to maxw visible columns, '..' suffix when cut."""
+    if vwidth(s) <= maxw:
+        return s
     if maxw <= 2:
         return s[:maxw]
-    return s[:maxw-2] + ".." if len(s) > maxw else s
+    out, w = "", 0
+    for ch in s:
+        cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if w + cw > maxw - 2:
+            break
+        out += ch
+        w += cw
+    return out + ".."
 
-def model_box(name):
-    return f"{MODEL_BOX}[{R} {MODEL_TXT}{name} {R}{MODEL_BOX}]{R}"
 
-def ctx_bar(pct, bar_len):
-    if pct < 70:
-        color = NEON_GREEN
-    elif pct < 90:
-        color = NEON_ORG
-    else:
-        color = NEON_RED
-    return f"{bar_fill(pct, bar_len, color, chr(27) + '[38;5;22m')} {color}{pct}%{R}"
+def clamp(n, lo, hi):
+    return max(lo, min(n, hi))
+
 
 def fmt_tok(n):
     if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
+        return "{:.1f}M".format(n / 1_000_000)
     if n >= 1_000:
-        return f"{n / 1_000:.1f}K"
+        return "{:.1f}K".format(n / 1_000)
     return str(n)
 
-def fmt_countdown(secs, has_reset):
-    if not has_reset:
-        return "--"
+
+def fmt_win(n):
+    if n >= 1_000_000:
+        return "{:g}M".format(n / 1_000_000)
+    if n >= 1_000:
+        return "{}K".format(n // 1_000)
+    return str(n)
+
+
+def fmt_countdown(secs):
     if secs <= 0:
         return "0m"
     if secs >= 86400:
         d, rem = divmod(secs, 86400)
         h = rem // 3600
-        return f"{d}d{h}h" if h else f"{d}d"
+        return "{}d{}h".format(d, h) if h else "{}d".format(d)
     if secs >= 3600:
         h, rem = divmod(secs, 3600)
         m = rem // 60
-        return f"{h}h{m:02d}m" if m else f"{h}h"
-    m = max(secs // 60, 1)
-    return f"{m}m"
+        return "{}h{:02d}m".format(h, m) if m else "{}h".format(h)
+    return "{}m".format(max(secs // 60, 1))
 
-def fmt_rl_label(pct, secs, has_reset, compact=False):
-    # Countdown only appears once usage crosses 75% (or in compact/no-reset cases hide entirely).
-    if compact or not has_reset or pct < 75:
-        return f"{pct}%"
-    return f"{pct}% · {fmt_countdown(secs, has_reset)}"
-
-def tok_bar(inp, out, bar_len):
-    total = inp + out
-    if total == 0:
-        return f"{DIM}{_EMPTY * bar_len}{R}"
-    in_fill = max(round(inp / total * bar_len), 1 if inp else 0)
-    out_fill = bar_len - in_fill
-    return f"{NEON_CYAN}{_FULL * in_fill}{R}{NEON_YEL}{_FULL * out_fill}{R} {NEON_WHT}{fmt_tok(total)}{R}"
-
-def rate_bar(pct, bar_len, fill_color, empty_color):
-    if pct >= 90:
-        fill_color = NEON_RED
-    elif pct >= 70:
-        fill_color = NEON_ORG
-    return f"{bar_fill(pct, bar_len, fill_color, empty_color)} {fill_color}{pct}%{R}"
-
-def rate_mirror(pct_5h, pct_7d, bar_len, fc_5h, ec_5h, fc_7d, ec_7d, lbl_5h, lbl_7d):
-    if pct_5h >= 90: fc_5h = NEON_RED
-    elif pct_5h >= 70: fc_5h = NEON_ORG
-    if pct_7d >= 90: fc_7d = NEON_RED
-    elif pct_7d >= 70: fc_7d = NEON_ORG
-    bg_5h = ec_5h.replace("38;5;", "48;5;")
-    # Bright fc as bg for 5h partial cell (strip bold; bold doesn't apply to bg)
-    bg_fc_5h = fc_5h.replace("1;38;5;", "48;5;").replace("38;5;", "48;5;")
-    bg_7d = ec_7d.replace("38;5;", "48;5;")
-    # 5h: fills right-to-left. Mirror the 7d gradient by drawing a left-side block
-    # with swapped colors (bright bg, dark fg) so the visible fill sits on the
-    # cell's right edge — adjacent to the full blocks, with no gap between.
-    units_5h = pct_5h * bar_len * 8 // 100
-    full_5h = units_5h // 8
-    frac_5h = units_5h % 8
-    empty_5h = bar_len - full_5h - (1 if frac_5h else 0)
-    left = f"{fc_5h}{lbl_5h}{R} {bg_5h}{' ' * empty_5h}{R}"
-    if frac_5h:
-        left += f"{bg_fc_5h}{ec_5h}{_FRAC[8 - frac_5h]}{R}"
-    left += f"{fc_5h}{_FULL * full_5h}{R}"
-    # 7d: fills left-to-right (standard direction)
-    units_7d = pct_7d * bar_len * 8 // 100
-    full_7d = units_7d // 8
-    frac_7d = units_7d % 8
-    empty_7d = bar_len - full_7d - (1 if frac_7d else 0)
-    right = f"{fc_7d}{_FULL * full_7d}{R}"
-    if frac_7d:
-        right += f"{bg_7d}{fc_7d}{_FRAC[frac_7d]}{R}"
-    right += f"{bg_7d}{' ' * empty_7d}{R} {fc_7d}{lbl_7d}{R}"
-    return f"{left}{DIM}|{R}{right}"
 
 def link(url, text):
     if url:
-        return f"\033]8;;{url}\a{text}\033]8;;\a"
+        return "\033]8;;{}\a{}\033]8;;\a".format(url, text)
     return text
 
-def agent_display():
-    parts = []
-    if agent_name:
-        parts.append(f"{NEON_CYAN}\u2590\u2588{R} {NEON_WHT}{agent_name}{R}")
-    if worktree:
-        parts.append(f"{NEON_PINK}\u2387 {worktree}{R}")
-    return " ".join(parts)
 
-# ── dynamic sizing ──
-r1_model_len = vwidth(model) + 4
-r1_dir_len = vwidth("\U0001F4C2") + 1 + vwidth(dir_name)  # 📂 + space + dir
-r1_branch_len = vwidth(f"\u2387 {git_branch} ") if git_branch else 0
+# ── git via file reads (no subprocess, no PATH dependency) ──
+def _find_gitdir(cwd):
+    d = cwd
+    while True:
+        g = os.path.join(d, ".git")
+        if os.path.isdir(g):
+            return g
+        if os.path.isfile(g):  # worktree / submodule pointer
+            try:
+                with open(g) as f:
+                    first = f.readline().strip()
+                if first.startswith("gitdir:"):
+                    p = first[7:].strip()
+                    return p if os.path.isabs(p) else os.path.normpath(os.path.join(d, p))
+            except OSError:
+                return ""
+        parent = os.path.dirname(d)
+        if parent == d:
+            return ""
+        d = parent
 
-r1_fixed = 2  # "┌─"
-r1_seps = sum(1 for x in [True, True, git_branch] if x) - 1
-r1_natural = r1_fixed + r1_model_len + r1_dir_len + r1_branch_len + r1_seps * SEP_PLAIN_LEN
 
-if r1_natural <= COLS:
-    t_dir = dir_name
-    t_branch = git_branch
-else:
-    budget = int(COLS * 0.75) - r1_fixed - r1_model_len - r1_seps * SEP_PLAIN_LEN - 6
-    if budget > 0:
-        w_dir = max(budget * 40 // 100, 5)
-        w_br  = max(budget * 60 // 100, 5) if git_branch else 0
-        t_dir = trunc(dir_name, w_dir)
-        t_branch = trunc(git_branch, w_br) if git_branch else ""
+def git_branch(cwd):
+    """Branch name (or short SHA when detached) by reading .git/HEAD."""
+    gitdir = _find_gitdir(cwd)
+    if not gitdir:
+        return ""
+    try:
+        with open(os.path.join(gitdir, "HEAD")) as f:
+            head = f.read().strip()
+    except OSError:
+        return ""
+    if head.startswith("ref: refs/heads/"):
+        return head[16:]
+    return head[:7]  # detached HEAD
+
+
+def repo_url(data, cwd, branch):
+    """Browse URL for the current branch: workspace.repo, else .git/config."""
+    host = dig(data, "workspace", "repo", "host")
+    owner = dig(data, "workspace", "repo", "owner")
+    name = dig(data, "workspace", "repo", "name")
+    if not (host and owner and name):
+        remote = _origin_url(cwd)
+        m = re.match(r"(?:git@|https?://)([^:/]+)[:/](.+?)/(.+?)(?:\.git)?/?$", remote)
+        if not m:
+            return ""
+        host, owner, name = m.group(1), m.group(2), m.group(3)
+    base = "https://{}/{}/{}".format(host, owner, name)
+    if host == "github.com" and branch:
+        return "{}/tree/{}".format(base, branch)
+    return base
+
+
+def _origin_url(cwd):
+    gitdir = _find_gitdir(cwd)
+    if not gitdir:
+        return ""
+    cfg = os.path.join(gitdir, "config")
+    if not os.path.isfile(cfg):  # linked worktree: config lives in commondir
+        try:
+            with open(os.path.join(gitdir, "commondir")) as f:
+                common = f.read().strip()
+            common = common if os.path.isabs(common) else os.path.join(gitdir, common)
+            cfg = os.path.join(os.path.normpath(common), "config")
+        except OSError:
+            return ""
+    try:
+        in_origin = False
+        with open(cfg) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    in_origin = line.replace("'", '"') == '[remote "origin"]'
+                elif in_origin and line.startswith("url"):
+                    _, _, val = line.partition("=")
+                    return val.strip()
+    except OSError:
+        pass
+    return ""
+
+
+# ── gauge rendering ──
+def zone_color(pos_pct):
+    if pos_pct < 70:
+        return NEON_GREEN, ZONE_EC[0]
+    if pos_pct < 90:
+        return NEON_ORG, ZONE_EC[1]
+    return NEON_RED, ZONE_EC[2]
+
+
+def ctx_gauge(pct, bar_len):
+    """Zoned gauge: cells tint green/amber/red by position (visible redline)."""
+    pct_c = clamp(pct, 0, 100)
+    units = pct_c * bar_len * 8 // 100
+    out = ""
+    for i in range(bar_len):
+        fc, ec = zone_color((i + 0.5) * 100 / bar_len)
+        bg = ec.replace("38;5;", "48;5;")
+        u = clamp(units - i * 8, 0, 8)
+        if u == 8:
+            out += fc + _FULL + R
+        elif u == 0:
+            out += bg + " " + R
+        else:
+            out += bg + fc + _FRAC[u] + R
+    return out
+
+
+def value_color(pct):
+    if pct < 70:
+        return NEON_GREEN
+    if pct < 90:
+        return NEON_ORG
+    return NEON_RED
+
+
+def rate_mirror(pct_5h, pct_7d, bar_len, lbl_5h, lbl_7d):
+    """5h gauge fills right-to-left, 7d left-to-right, meeting at center."""
+    fc_5h = value_color(pct_5h) if pct_5h >= 70 else RL_5H_FC
+    fc_7d = value_color(pct_7d) if pct_7d >= 70 else RL_7D_FC
+    bg_5h = RL_5H_EC.replace("38;5;", "48;5;")
+    bg_7d = RL_7D_EC.replace("38;5;", "48;5;")
+    bg_fc_5h = fc_5h.replace("1;38;5;", "48;5;").replace("38;5;", "48;5;")
+    p5, p7 = clamp(pct_5h, 0, 100), clamp(pct_7d, 0, 100)
+
+    units = p5 * bar_len * 8 // 100
+    full, frac = units // 8, units % 8
+    empty = bar_len - full - (1 if frac else 0)
+    left = "{}{}{} {}{}{}".format(fc_5h, lbl_5h, R, bg_5h, " " * empty, R)
+    if frac:  # mirrored partial: bright bg, dark fg, inverted eighth-block
+        left += "{}{}{}{}".format(bg_fc_5h, RL_5H_EC, _FRAC[8 - frac], R)
+    left += "{}{}{}".format(fc_5h, _FULL * full, R)
+
+    units = p7 * bar_len * 8 // 100
+    full, frac = units // 8, units % 8
+    empty = bar_len - full - (1 if frac else 0)
+    right = "{}{}{}".format(fc_7d, _FULL * full, R)
+    if frac:
+        right += "{}{}{}{}".format(bg_7d, fc_7d, _FRAC[frac], R)
+    right += "{}{}{} {}{}{}".format(bg_7d, " " * empty, R, fc_7d, lbl_7d, R)
+
+    return "{}{}|{}{}".format(left, DIM, R, right)
+
+
+# ── payload access ──
+def dig(data, *keys):
+    cur = data
+    for k in keys:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+
+def num(v, default=0):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+# ── row assembly ──
+def _join(prefix, segs):
+    return prefix + SEP.join(s for s in segs if s)
+
+
+def _frame(row, cols, corner, frame_on):
+    """Pad with a dim rule and close the frame at the right edge."""
+    gap = cols - vislen(row)
+    if not frame_on or gap < 2:
+        return row
+    return "{} {}{}{}{}{}{}".format(
+        row, RULE, "─" * (gap - 2), R, NEON_GREEN, corner, R)
+
+
+def render(data, cols, now):
+    """Return [row1, row2] sized to cols."""
+    frame_on = os.environ.get("RETRO_HUD_FRAME", "1") != "0"
+    cd_pct = num(os.environ.get("RETRO_HUD_COUNTDOWN_PCT"), 75)
+
+    # ── extract fields ──
+    cwd = str(dig(data, "workspace", "current_dir") or data.get("cwd") or "~")
+    model = str(dig(data, "model", "display_name") or dig(data, "model", "id") or "---")
+    effort = str(dig(data, "effort", "level") or "")
+    thinking = bool(dig(data, "thinking", "enabled"))
+    vim_mode = str(dig(data, "vim", "mode") or "")
+    session_name = str(data.get("session_name") or "")
+
+    ctx_pct = dig(data, "context_window", "used_percentage")
+    ctx_tok = num(dig(data, "context_window", "total_input_tokens"))
+    win_size = num(dig(data, "context_window", "context_window_size"))
+    if ctx_pct is None and win_size:
+        ctx_pct = ctx_tok * 100 // win_size
+    ctx_pct = num(ctx_pct)
+
+    usage = dig(data, "context_window", "current_usage") or {}
+    cache_read = num(usage.get("cache_read_input_tokens"))
+    cache_denom = cache_read + num(usage.get("input_tokens")) + \
+        num(usage.get("cache_creation_input_tokens"))
+
+    cost = 0.0
+    try:
+        cost = float(dig(data, "cost", "total_cost_usd") or 0)
+    except (TypeError, ValueError):
+        pass
+    dur_ms = num(dig(data, "cost", "total_duration_ms"))
+    lines_add = num(dig(data, "cost", "total_lines_added"))
+    lines_del = num(dig(data, "cost", "total_lines_removed"))
+
+    agent_name = str(dig(data, "agent", "name") or "")
+    worktree = str(dig(data, "worktree", "name") or dig(data, "workspace", "git_worktree") or "")
+
+    has_rl = isinstance(data.get("rate_limits"), dict)
+    rl5_pct = num(dig(data, "rate_limits", "five_hour", "used_percentage"))
+    rl7_pct = num(dig(data, "rate_limits", "seven_day", "used_percentage"))
+    rl5_reset = num(dig(data, "rate_limits", "five_hour", "resets_at"))
+    rl7_reset = num(dig(data, "rate_limits", "seven_day", "resets_at"))
+    rl5_left = max(rl5_reset - now, 0)
+    rl7_left = max(rl7_reset - now, 0)
+
+    pr_num = num(dig(data, "pr", "number"))
+    pr_url = str(dig(data, "pr", "url") or "")
+    pr_state = str(dig(data, "pr", "review_state") or "pending")
+
+    branch = str(data.get("_branch_override") or "") or git_branch(cwd)
+    gh_url = repo_url(data, cwd, branch) if branch else ""
+    dir_name = os.path.basename(cwd.rstrip(os.sep)) or cwd
+
+    # ── gauge widths scale with the terminal ──
+    ctx_len = clamp(cols // 20, 4, 10)
+    rl_len = clamp(cols // 40, 3, 6)
+
+    # ── duration ──
+    dur_min = dur_ms // 60000
+    if dur_min >= 60:
+        dur_str = "{}h{:02d}m".format(dur_min // 60, dur_min % 60)
+    elif dur_min > 0:
+        dur_str = "{}m".format(dur_min)
     else:
-        t_dir = trunc(dir_name, 6)
-        t_branch = trunc(git_branch, 6) if git_branch else ""
+        dur_str = "{}s".format(dur_ms % 60000 // 1000)
 
-# ── bar sizes (all bars same width) ──
-bar_len = max(COLS // 72, 2)
-ctx_bar_len = bar_len
-tok_bar_len = bar_len
+    # ═══ ROW 1 ═══
+    def model_seg(name):
+        inner = MODEL_TXT + name + R
+        if effort in EFFORT_GLYPHS:
+            inner += " " + EFFORT_COLORS[effort] + EFFORT_GLYPHS[effort] + R
+        if thinking:
+            inner += " " + NEON_CYAN + "✧" + R
+        return "{}[{} {} {}]{}".format(MODEL_BOX, R, inner, MODEL_BOX, R)
 
-# ── build row 1 ──
-branch_part = ""
-if t_branch:
-    branch_part = f"{SEP}{BRANCH_BADGE} \u2387 {link(github_url, t_branch)} {R}"
+    def dir_seg(name):
+        return NEON_WHT + "\U0001F4C2 " + name + R
 
-row1 = (
-    f"{TL}{H}{model_box(model)}"
-    f"{SEP}{NEON_WHT}\U0001F4C2 {t_dir}{R}"
-    f"{branch_part}"
-)
+    def branch_seg(name):
+        return "{} ⎇ {} {}".format(BRANCH_BADGE, link(gh_url, name), R)
 
-# ── build row 2 with progressive width-aware truncation ──
-cost_fmt = f"${cost:.2f}"
+    def pr_seg():
+        color, glyph = PR_STATE.get(pr_state, PR_STATE["pending"])
+        return color + link(pr_url, "#{}{}".format(pr_num, glyph)) + R
 
-# Visible lengths of each segment
-# ctx_bar: bar + space + pct%  |  tok_bar: bar + space + total  |  rate_mirror: pct% + space + bar + | + bar + space + pct%
-_seg_ctx = ctx_bar_len + 1 + len(str(ctx_pct)) + 1
-_seg_tok = tok_bar_len + 1 + len(fmt_tok(in_tok + out_tok))
-_lbl_5h_rich = fmt_rl_label(rl_5h_pct, rl_5h_left, bool(rl_5h_reset))
-_lbl_7d_rich = fmt_rl_label(rl_7d_pct, rl_7d_left, bool(rl_7d_reset))
-_lbl_5h_compact = fmt_rl_label(rl_5h_pct, rl_5h_left, bool(rl_5h_reset), compact=True)
-_lbl_7d_compact = fmt_rl_label(rl_7d_pct, rl_7d_left, bool(rl_7d_reset), compact=True)
+    def vim_seg():
+        return VIM_COLORS.get(vim_mode, NEON_CYAN) + "[" + vim_mode[0] + "]" + R
 
-def _rl_seg_width(l5, l7):
-    # rate_mirror: lbl + space + bar + | + bar + space + lbl
-    return vwidth(l5) + 1 + tok_bar_len + 1 + tok_bar_len + 1 + vwidth(l7)
+    def session_seg(name):
+        return DIM + "◈ " + name + R
 
-_has_agent_info = bool(agent_name or worktree)
-if _has_agent_info:
-    _seg_agent = (
-        (vwidth(agent_name) + 3 if agent_name else 0)  # "\u2590\u2588 name"
-        + (vwidth(worktree) + 2 if worktree else 0)    # "\u2387 name"
-        + (1 if agent_name and worktree else 0)        # join space
-        + SEP_PLAIN_LEN
-    )
-else:
-    _seg_agent = 0
-_seg_dur = 2 + vwidth(dur_str) + SEP_PLAIN_LEN  # T: + dur
-_seg_cost = vwidth(cost_fmt) + SEP_PLAIN_LEN
+    t_model, t_dir, t_branch, t_session = model, dir_name, branch, session_name
+    show_pr, show_vim, show_session = pr_num > 0, bool(vim_mode), bool(session_name)
 
-# Try rich rate-limit labels first ("45% · 2h30m"); fall back to compact ("45%") if too wide.
-_r2_core_fixed = 2 + _seg_ctx + SEP_PLAIN_LEN + _seg_tok + SEP_PLAIN_LEN + SEP_PLAIN_LEN + _seg_cost
-if _r2_core_fixed + _rl_seg_width(_lbl_5h_rich, _lbl_7d_rich) <= COLS:
-    _lbl_5h, _lbl_7d = _lbl_5h_rich, _lbl_7d_rich
-else:
-    _lbl_5h, _lbl_7d = _lbl_5h_compact, _lbl_7d_compact
-_seg_rl = _rl_seg_width(_lbl_5h, _lbl_7d)
+    for step in range(9):
+        segs = [model_seg(t_model), dir_seg(t_dir)]
+        if t_branch:
+            segs.append(branch_seg(t_branch))
+        if show_pr:
+            segs.append(pr_seg())
+        if show_vim:
+            segs.append(vim_seg())
+        if show_session:
+            segs.append(session_seg(t_session))
+        row1 = _join(NEON_GREEN + "┌─" + R, segs)
+        if vislen(row1) <= cols:
+            break
+        if step == 0:
+            show_session = False
+        elif step == 1:
+            show_vim = False
+        elif step == 2:
+            t_branch = trunc(branch, 16)
+            t_dir = trunc(dir_name, 14)
+        elif step == 3:
+            show_pr = False
+        elif step == 4:
+            t_branch = trunc(branch, 8)
+            t_dir = trunc(dir_name, 8)
+        elif step == 5:
+            t_branch = ""
+        elif step == 6:
+            t_model = trunc(model, 12)
+        else:
+            t_dir = trunc(dir_name, max(cols - vislen(_join("xx", [model_seg(t_model)])) - 7, 3))
 
-# Core row 2 = "└─" + ctx // tok // rate_mirror // cost (always shown)
-r2_core = 2 + _seg_ctx + SEP_PLAIN_LEN + _seg_tok + SEP_PLAIN_LEN + _seg_rl + SEP_PLAIN_LEN + _seg_cost
-r2_budget = COLS - r2_core
+    # ═══ ROW 2 ═══
+    def ctx_seg(tok_mode):
+        # tok_mode: 2 = "42% 87.3K/200K", 1 = "42% 87.3K", 0 = "42%"
+        c = value_color(clamp(ctx_pct, 0, 100))
+        s = "{} {}{}%{}".format(ctx_gauge(ctx_pct, ctx_len), c, clamp(ctx_pct, 0, 999), R)
+        if tok_mode and ctx_tok:
+            t = fmt_tok(ctx_tok)
+            if tok_mode == 2 and win_size:
+                t += "/" + fmt_win(win_size)
+            s += " " + NEON_WHT + t + R
+        return s
 
-# Progressively add optional segments in priority order: duration > agent
-show_dur = r2_budget >= _seg_dur
-if show_dur:
-    r2_budget -= _seg_dur
-show_agent = _has_agent_info and r2_budget >= _seg_agent
+    def rl_label(pct, left, reset, rich):
+        lbl = "{}%".format(clamp(pct, 0, 999))
+        if rich and reset and pct >= cd_pct:
+            lbl += " · " + fmt_countdown(left)
+        return lbl
 
-_RL_5H_FC = "\033[1;38;5;33m"
-_RL_5H_EC = "\033[38;5;17m"
-_RL_7D_FC = "\033[1;38;5;135m"
-_RL_7D_EC = "\033[38;5;54m"
+    def rl_seg(rich):
+        return rate_mirror(rl5_pct, rl7_pct, rl_len,
+                           rl_label(rl5_pct, rl5_left, rl5_reset, rich),
+                           rl_label(rl7_pct, rl7_left, rl7_reset, rich))
 
-row2 = (
-    f"{BL}{H}"
-    f"{ctx_bar(ctx_pct, ctx_bar_len)}"
-    f"{SEP}{tok_bar(in_tok, out_tok, tok_bar_len)}"
-    f"{SEP}{rate_mirror(rl_5h_pct, rl_7d_pct, tok_bar_len, _RL_5H_FC, _RL_5H_EC, _RL_7D_FC, _RL_7D_EC, _lbl_5h, _lbl_7d)}"
-)
-if show_dur:
-    row2 += f"{SEP}{NEON_PINK}T:{dur_str}{R}"
-row2 += f"{SEP}{NEON_YEL}{cost_fmt}{R}"
-if show_agent:
-    row2 += f"{SEP}{agent_display()}"
+    def lines_seg():
+        return "{}+{}{}{}/{}{}-{}{}".format(
+            NEON_GREEN, lines_add, R, DIM, R, NEON_RED, lines_del, R)
 
-print(row1)
-print(row2, end="")
+    def cache_seg():
+        pct = cache_read * 100 // cache_denom
+        return "{}cache{} {}{}%{}".format(DIM, R, NEON_CYAN, pct, R)
+
+    def agent_seg():
+        parts = []
+        if agent_name:
+            parts.append("{}▐█{} {}{}{}".format(NEON_CYAN, R, NEON_WHT, agent_name, R))
+        if worktree:
+            parts.append("{}⎇ {}{}".format(NEON_PINK, worktree, R))
+        return " ".join(parts)
+
+    show_lines = lines_add > 0 or lines_del > 0
+    show_dur = True
+    show_cache = cache_denom > 0 and cols >= 140
+    show_agent = bool(agent_name or worktree)
+    tok_mode, rl_rich = 2, True
+
+    for step in range(8):
+        segs = [ctx_seg(tok_mode)]
+        if has_rl:
+            segs.append(rl_seg(rl_rich))
+        if show_lines:
+            segs.append(lines_seg())
+        if show_cache:
+            segs.append(cache_seg())
+        if show_dur:
+            segs.append(NEON_PINK + "T:" + dur_str + R)
+        segs.append(NEON_YEL + ("${:.2f}".format(cost) if cost < 100 else "${:.0f}".format(cost)) + R)
+        if show_agent:
+            segs.append(agent_seg())
+        row2 = _join(NEON_GREEN + "└─" + R, segs)
+        if vislen(row2) <= cols:
+            break
+        if step == 0:
+            show_cache = False
+        elif step == 1:
+            tok_mode = 1
+        elif step == 2:
+            rl_rich = False
+        elif step == 3:
+            show_lines = False
+        elif step == 4:
+            tok_mode = 0
+        elif step == 5:
+            show_agent = False
+        else:
+            show_dur = False
+
+    return [_frame(row1, cols, "┐", frame_on),
+            _frame(row2, cols, "┘", frame_on)]
+
+
+# ── entry point ──
+DEMO_DATA = {
+    "model": {"display_name": "Fable 5"},
+    "_branch_override": "main",
+    "workspace": {"current_dir": "/home/ripley/projects/nostromo",
+                  "repo": {"host": "github.com", "owner": "codyslater",
+                           "name": "ccstatusline_retro-hud"}},
+    "session_name": "retro-hud-v2",
+    "effort": {"level": "max"},
+    "thinking": {"enabled": True},
+    "vim": {"mode": "INSERT"},
+    "agent": {"name": "reviewer"},
+    "context_window": {"used_percentage": 42, "total_input_tokens": 84213,
+                       "context_window_size": 200000,
+                       "current_usage": {"input_tokens": 1900,
+                                         "cache_read_input_tokens": 79800,
+                                         "cache_creation_input_tokens": 2513,
+                                         "output_tokens": 1150}},
+    "cost": {"total_cost_usd": 3.21, "total_duration_ms": 5432100,
+             "total_lines_added": 128, "total_lines_removed": 37},
+    "pr": {"number": 42, "url": "https://github.com/codyslater/ccstatusline_retro-hud/pull/42",
+           "review_state": "approved"},
+    "rate_limits": {"five_hour": {"used_percentage": 63},
+                    "seven_day": {"used_percentage": 81}},
+}
+
+
+def main(argv):
+    if "--version" in argv:
+        print("retro-hud " + __version__)
+        return 0
+    if "--demo" in argv:
+        data = dict(DEMO_DATA)
+        now = int(time.time())
+        data["rate_limits"]["five_hour"]["resets_at"] = now + 7200
+        data["rate_limits"]["seven_day"]["resets_at"] = now + 259200
+    else:
+        try:
+            data = json.load(sys.stdin)
+            if not isinstance(data, dict):
+                data = {}
+        except (ValueError, OSError):
+            data = {}
+        now = int(time.time())
+
+    cols = shutil.get_terminal_size((100, 24)).columns
+    try:
+        rows = render(data, cols, now)
+    except Exception:  # never break the statusline — degrade gracefully
+        model = dig(data, "model", "display_name") or "retro-hud"
+        rows = ["{}┌─{}[ {}{}{} ]{}".format(NEON_GREEN, R, MODEL_TXT, model, R + MODEL_BOX, R),
+                "{}└─{} {}(status degraded){}".format(NEON_GREEN, R, DIM, R)]
+    print(rows[0])
+    print(rows[1], end="")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

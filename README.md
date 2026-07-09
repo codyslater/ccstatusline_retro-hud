@@ -6,40 +6,47 @@ A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude
 
 ## Features
 
-- Two-row HUD layout with $\color{#00ff00}{\textsf{green}}$ wireframe corners
+- Two-row HUD with a full $\color{#00ff00}{\textsf{green}}$ wireframe — corner brackets on both edges, joined by a dim rule
 - $\color{#00ffff}{\textsf{Neon cyan}}$ `//` separators
-- Dynamic column sizing based on terminal width
-- Fractional-block progress bars with sub-character precision
-- Context usage bar with color coding ($\color{#00ff00}{\textsf{green}}$ < 70%, $\color{#ff8700}{\textsf{orange}}$ < 90%, $\color{#ff0000}{\textsf{red}}$)
-- I/O token bar showing input/output ratio and total
-- Mirrored rate limit display (5-hour and 7-day) with distinct color palettes
-- Git branch with clickable GitHub link (OSC 8)
-- Effort level indicator dot (when set in settings)
-- Agent/worktree indicator when subagents are active
-- Session cost and duration tracking
-- Double-width emoji support for accurate terminal alignment
+- Zoned context gauge: $\color{#00ff00}{\textsf{green}}$ / $\color{#ff8700}{\textsf{amber}}$ / $\color{#ff0000}{\textsf{red}}$ zones tinted into the empty track like a redlined instrument, fractional-block fill with sub-character precision
+- Context tokens next to the gauge (`42% 84.2K/200K`), aware of 200K vs 1M context windows
+- Mirrored rate-limit gauges ($\color{#0087ff}{\textsf{blue}}$ 5h ← | → $\color{#af5fff}{\textsf{violet}}$ 7d) with reset countdowns once usage crosses 75% — hidden entirely on plans without rate limits
+- Git branch badge with clickable repo link (OSC 8), read directly from `.git` — no subprocess, works in worktrees and on detached HEADs
+- PR badge (`#42✓`) colored by review state, hyperlinked to the PR
+- Effort-level dot in the model box (`·` `•` `●` `⬤` `✦`) and `✧` when extended thinking is on
+- Vim mode badge (`[N]` `[I]` `[V]`) when vim mode is enabled
+- Lines added/removed, session cost, duration, prompt-cache hit rate (wide terminals), session name, and agent/worktree indicators
+- Width-aware progressive degradation: segments truncate, then drop, in priority order — rows never overflow the terminal
+- Double-width emoji handling for accurate alignment; crash-proof against missing or malformed payload fields
 
 ### Row 1
+
 | Field | Color | Symbol |
 |-------|-------|--------|
-| Model + effort | white in $\color{#00ff00}{\textsf{green}}$ `[ ]` box | `·` `•` `●` `⬤` |
+| Model + effort + thinking | white in $\color{#00ff00}{\textsf{green}}$ `[ ]` box | `·` `•` `●` `⬤` `✦`, `✧` |
 | Working directory | white | `📂` |
-| Git branch | white on $\color{#af00ff}{\textsf{purple}}$ badge | `⎇` |
+| Git branch (linked) | white on $\color{#af00ff}{\textsf{purple}}$ badge | `⎇` |
+| Pull request (linked) | $\color{#00ff00}{\textsf{green}}$ / $\color{#ffff00}{\textsf{yellow}}$ / $\color{#ff0000}{\textsf{red}}$ by review state | `#42✓` |
+| Vim mode | mode-colored | `[N]` `[I]` `[V]` |
+| Session name | dim | `◈` |
 
 ### Row 2
+
 | Field | Color | Symbol |
 |-------|-------|--------|
-| Context % bar | $\color{#00ff00}{\textsf{green}}$ / $\color{#ff8700}{\textsf{orange}}$ / $\color{#ff0000}{\textsf{red}}$ | `█▌` fractional |
-| I/O token bar | $\color{#00ffff}{\textsf{cyan}}$ input / $\color{#ffff00}{\textsf{yellow}}$ output | `██` + total |
-| Rate limits (mirrored) | $\color{#0087ff}{\textsf{blue}}$ 5h ← \| → $\color{#af5fff}{\textsf{violet}}$ 7d | `██\|██` |
-| Duration | $\color{#ff0087}{\textsf{pink}}$ | `⏱` |
+| Context gauge + tokens | zoned $\color{#00ff00}{\textsf{green}}$ / $\color{#ff8700}{\textsf{amber}}$ / $\color{#ff0000}{\textsf{red}}$ | `█▌` fractional |
+| Rate limits (mirrored) | $\color{#0087ff}{\textsf{blue}}$ 5h ← \| → $\color{#af5fff}{\textsf{violet}}$ 7d | `██\|██` + countdown |
+| Lines added/removed | $\color{#00ff00}{\textsf{green}}$ / $\color{#ff0000}{\textsf{red}}$ | `+128/-37` |
+| Cache hit rate | $\color{#00ffff}{\textsf{cyan}}$ (terminals ≥ 140 cols) | `cache 94%` |
+| Duration | $\color{#ff0087}{\textsf{pink}}$ | `T:` |
 | Session cost | $\color{#ffff00}{\textsf{yellow}}$ | `$` |
-| Agent status | $\color{#00ffff}{\textsf{cyan}}$ / white | `▐█` or `┄┄┄` idle |
+| Agent / worktree | $\color{#00ffff}{\textsf{cyan}}$ / $\color{#ff0087}{\textsf{pink}}$ | `▐█` / `⎇` |
 
 ## Requirements
 
 - Python 3.6+
-- Claude Code
+- Claude Code 2.1.153+ (needed for the `COLUMNS` width variable; rate-limit,
+  PR, and effort fields light up automatically on versions that provide them)
 - A terminal with 256-color support
 - Recommended font: JetBrains Mono, Fira Code, or a Nerd Font (for fractional block characters)
 
@@ -51,7 +58,14 @@ cd ccstatusline_retro-hud
 bash install.sh
 ```
 
-Then restart Claude Code.
+Then restart Claude Code. The installer backs up your existing
+`settings.json` before touching it. To remove: `bash uninstall.sh`.
+
+Preview without Claude Code:
+
+```bash
+python3 statusline.py --demo
+```
 
 ## Manual Install
 
@@ -61,10 +75,23 @@ Copy `statusline.py` and `statusline-command.sh` to `~/.claude/`, then add to `~
 {
   "statusLine": {
     "type": "command",
-    "command": "bash ~/.claude/statusline-command.sh"
+    "command": "bash ~/.claude/statusline-command.sh",
+    "refreshInterval": 30
   }
 }
 ```
+
+`refreshInterval` is optional; it re-renders every 30s while idle so the
+rate-limit countdowns keep ticking.
+
+## Configuration
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `RETRO_HUD_FRAME` | `1` | Set `0` to disable the right-edge frame fill |
+| `RETRO_HUD_COUNTDOWN_PCT` | `75` | Rate-limit % at which reset countdowns appear |
+
+Set them in the `env` block of `~/.claude/settings.json`.
 
 ### VS Code Terminal Tips
 
@@ -75,6 +102,16 @@ For best results in VS Code's integrated terminal:
   "terminal.integrated.unicodeVersion": "11"
 }
 ```
+
+## Development
+
+```bash
+python3 tests.py        # width safety, hostile payloads, CLI behavior
+python3 statusline.py --demo
+```
+
+Releases follow [SemVer](https://semver.org) with `v`-prefixed tags
+(see [CHANGELOG.md](CHANGELOG.md)).
 
 ## License
 
