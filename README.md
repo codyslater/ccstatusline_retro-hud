@@ -104,4 +104,4 @@ No dependencies, no subprocesses, no network — git state is read from
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 [Cody Slater](https://github.com/codyslater)
