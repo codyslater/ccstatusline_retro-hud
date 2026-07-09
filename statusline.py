@@ -29,7 +29,7 @@ cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
 "81% · 3d"; in the red zone (>=90%) it switches to time-to-reset only —
 the gauge itself already shows the saturation. "both" mode opts out.
 """
-__version__ = "2.4.1"
+__version__ = "2.4.2"
 
 import json
 import os
@@ -286,8 +286,13 @@ def value_color(pct):
     return NEON_RED
 
 
-def rate_mirror(pct_5h, pct_7d, bar_len, lbl_5h, lbl_7d):
-    """5h gauge fills right-to-left, 7d left-to-right, meeting at center."""
+def rate_mirror(pct_5h, pct_7d, len_5h, len_7d, lbl_5h, lbl_7d):
+    """5h gauge fills right-to-left, 7d left-to-right, meeting at center.
+
+    Bar lengths are per-side: in cycle mode each gauge stretches to absorb
+    its label's phase width difference, so the segment footprint and the
+    center divider stay put with no padding blanks.
+    """
     fc_5h = value_color(pct_5h) if pct_5h >= WARN_PCT else RL_5H_FC
     fc_7d = value_color(pct_7d) if pct_7d >= WARN_PCT else RL_7D_FC
     bg_5h = RL_5H_EC.replace("38;5;", "48;5;")
@@ -295,17 +300,17 @@ def rate_mirror(pct_5h, pct_7d, bar_len, lbl_5h, lbl_7d):
     bg_fc_5h = fc_5h.replace("1;38;5;", "48;5;").replace("38;5;", "48;5;")
     p5, p7 = clamp(pct_5h, 0, 100), clamp(pct_7d, 0, 100)
 
-    units = p5 * bar_len * 8 // 100
+    units = p5 * len_5h * 8 // 100
     full, frac = units // 8, units % 8
-    empty = bar_len - full - (1 if frac else 0)
+    empty = len_5h - full - (1 if frac else 0)
     left = "{}{}{} {}{}{}".format(fc_5h, lbl_5h, R, bg_5h, " " * empty, R)
     if frac:  # mirrored partial: bright bg, dark fg, inverted eighth-block
         left += "{}{}{}{}".format(bg_fc_5h, RL_5H_EC, _FRAC[8 - frac], R)
     left += "{}{}{}".format(fc_5h, _FULL * full, R)
 
-    units = p7 * bar_len * 8 // 100
+    units = p7 * len_7d * 8 // 100
     full, frac = units // 8, units % 8
-    empty = bar_len - full - (1 if frac else 0)
+    empty = len_7d - full - (1 if frac else 0)
     right = "{}{}{}".format(fc_7d, _FULL * full, R)
     if frac:
         right += "{}{}{}{}".format(bg_7d, fc_7d, _FRAC[frac], R)
@@ -517,30 +522,30 @@ def render(data, cols, now):
         rl_mode = "cycle"
     time_phase = rl_mode == "time" or (rl_mode == "cycle" and (now // 30) % 2 == 1)
 
-    def rl_label(pct, left, reset, rich, outer):
+    def rl_label(pct, left, reset, rich):
         # Escalation ladder: calm → cycle/pinned; ≥ cd_pct → "81% · 3d";
         # red zone → countdown only (the bar already screams the %).
+        # Returns (label, flex): labels stay tight, and in cycle mode the
+        # gauge stretches by `flex` cells — the width the other phase's
+        # label would need — so the flip never moves anything.
         pct_lbl = "{}%".format(clamp(pct, 0, 999))
         if not reset:
-            return pct_lbl
+            return pct_lbl, 0
+        cd_lbl = fmt_countdown(left)
         if pct >= RED_PCT and rl_mode != "both":
-            return fmt_countdown(left)
+            return cd_lbl, 0
         if rich and (pct >= cd_pct or rl_mode == "both"):
-            return pct_lbl + " · " + fmt_countdown(left)
-        lbl = fmt_countdown(left) if time_phase else pct_lbl
-        if rl_mode == "cycle":
-            # Reserve a fixed 5-column slot (fits "4h59m"/"6d23h"/"100%")
-            # so the footprint never changes as the cycle flips or the
-            # countdown text shrinks; pad on the outer side so the label
-            # stays snug against its gauge.
-            w = max(5, vwidth(lbl))
-            lbl = lbl.rjust(w) if outer == "l" else lbl.ljust(w)
-        return lbl
+            return pct_lbl + " · " + cd_lbl, 0
+        if rl_mode != "cycle":
+            return (cd_lbl if time_phase else pct_lbl), 0
+        shown, other = (cd_lbl, pct_lbl) if time_phase else (pct_lbl, cd_lbl)
+        return shown, max(vwidth(other) - vwidth(shown), 0)
 
     def rl_seg(rich):
-        return rate_mirror(rl5_pct, rl7_pct, rl_len,
-                           rl_label(rl5_pct, rl5_left, rl5_reset, rich, "l"),
-                           rl_label(rl7_pct, rl7_left, rl7_reset, rich, "r"))
+        l5, flex5 = rl_label(rl5_pct, rl5_left, rl5_reset, rich)
+        l7, flex7 = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
+        return rate_mirror(rl5_pct, rl7_pct, rl_len + flex5, rl_len + flex7,
+                           l5, l7)
 
     def lines_seg():
         return "{}+{}{}{}/{}{}-{}{}".format(

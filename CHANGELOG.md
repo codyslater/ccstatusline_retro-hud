@@ -4,6 +4,16 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.4.2] — 2026-07-08
+
+### Changed
+- Cycling rate-limit labels are tight again — the fixed 5-column slot
+  from v2.4.1 read as dead space in the % phase. Instead, each gauge now
+  stretches to absorb its own label's phase width difference: the
+  segment footprint, the center divider, and everything after it stay
+  put across flips, with the slack rendered as gauge trough rather than
+  blanks.
+
 ## [v2.4.1] — 2026-07-08
 
 ### Fixed
