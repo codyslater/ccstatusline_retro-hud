@@ -4,6 +4,18 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.1.0] — 2026-07-08
+
+### Added
+- Rate-limit labels now cycle between usage `%` and time-to-reset every
+  30 seconds (pairs with the installer's `refreshInterval`). Above the
+  countdown threshold both are shown together. Pin a style with
+  `RETRO_HUD_RL_MODE=pct|time|both` (default `cycle`).
+
+### Fixed
+- README screenshot: emoji are now pinned to the character grid in the
+  render pipeline, so the frame's right-edge corners align.
+
 ## [v2.0.0] — 2026-07-08
 
 ### Added

@@ -12,8 +12,10 @@ Flags:
 Env toggles:
     RETRO_HUD_FRAME=0            disable the right-edge frame fill
     RETRO_HUD_COUNTDOWN_PCT=75   rate-limit % at which reset countdowns appear
+    RETRO_HUD_RL_MODE=cycle      rate-limit labels: cycle (alternate % and
+                                 time-to-reset every 30s), pct, time, or both
 """
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 import json
 import os
@@ -453,11 +455,18 @@ def render(data, cols, now):
             s += " " + NEON_WHT + t + R
         return s
 
+    rl_mode = os.environ.get("RETRO_HUD_RL_MODE", "cycle")
+    if rl_mode not in ("cycle", "pct", "time", "both"):
+        rl_mode = "cycle"
+    time_phase = rl_mode == "time" or (rl_mode == "cycle" and (now // 30) % 2 == 1)
+
     def rl_label(pct, left, reset, rich):
-        lbl = "{}%".format(clamp(pct, 0, 999))
-        if rich and reset and pct >= cd_pct:
-            lbl += " · " + fmt_countdown(left)
-        return lbl
+        pct_lbl = "{}%".format(clamp(pct, 0, 999))
+        if not reset:
+            return pct_lbl
+        if rich and (pct >= cd_pct or rl_mode == "both"):
+            return pct_lbl + " · " + fmt_countdown(left)
+        return fmt_countdown(left) if time_phase else pct_lbl
 
     def rl_seg(rich):
         return rate_mirror(rl5_pct, rl7_pct, rl_len,

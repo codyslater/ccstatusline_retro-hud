@@ -87,9 +87,26 @@ class TestContent(unittest.TestCase):
             self.assertIn(expect, plain, "missing {!r} in:\n{}".format(expect, plain))
 
     def test_countdown_gated_below_threshold(self):
+        # NOW // 30 is even → percentage phase of the cycle
         plain = sl.strip_ansi(sl.render(copy.deepcopy(FULL), 220, NOW)[1])
-        self.assertNotIn("63% ·", plain)  # 63 < 75 → no countdown
-        self.assertIn("81% ·", plain)
+        self.assertIn("63%", plain)
+        self.assertNotIn("63% ·", plain)  # 63 < 75 → no combined label
+        self.assertIn("81% ·", plain)     # ≥75 → both, in every phase
+
+    def test_cycle_time_phase(self):
+        # NOW+30 // 30 is odd → time phase: 5h label becomes a countdown
+        plain = sl.strip_ansi(sl.render(copy.deepcopy(FULL), 220, NOW + 30)[1])
+        self.assertIn("1h59m", plain)     # 7200s reset − 30s elapsed
+        self.assertNotIn("63%", plain)
+        self.assertIn("81% ·", plain)     # urgent side still shows both
+
+    def test_rl_mode_env_pins_phase(self):
+        os.environ["RETRO_HUD_RL_MODE"] = "pct"
+        try:
+            plain = sl.strip_ansi(sl.render(copy.deepcopy(FULL), 220, NOW + 30)[1])
+            self.assertIn("63%", plain)   # pinned to pct despite time phase
+        finally:
+            del os.environ["RETRO_HUD_RL_MODE"]
 
     def test_no_rate_limits_hides_mirror(self):
         plain = sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 160, NOW)[1])

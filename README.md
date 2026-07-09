@@ -10,7 +10,7 @@ A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude
 - $\color{#00ffff}{\textsf{Neon cyan}}$ `//` separators
 - Zoned context gauge: $\color{#00ff00}{\textsf{green}}$ / $\color{#ff8700}{\textsf{amber}}$ / $\color{#ff0000}{\textsf{red}}$ zones tinted into the empty track like a redlined instrument, fractional-block fill with sub-character precision
 - Context tokens next to the gauge (`42% 84.2K/200K`), aware of 200K vs 1M context windows
-- Mirrored rate-limit gauges ($\color{#0087ff}{\textsf{blue}}$ 5h ← | → $\color{#af5fff}{\textsf{violet}}$ 7d) with reset countdowns once usage crosses 75% — hidden entirely on plans without rate limits
+- Mirrored rate-limit gauges ($\color{#0087ff}{\textsf{blue}}$ 5h ← | → $\color{#af5fff}{\textsf{violet}}$ 7d) whose labels alternate between usage % and time-to-reset every 30s; above 75% usage both are shown together — hidden entirely on plans without rate limits
 - Git branch badge with clickable repo link (OSC 8), read directly from `.git` — no subprocess, works in worktrees and on detached HEADs
 - PR badge (`#42✓`) colored by review state, hyperlinked to the PR
 - Effort-level dot in the model box (`·` `•` `●` `⬤` `✦`) and `✧` when extended thinking is on
@@ -89,7 +89,8 @@ rate-limit countdowns keep ticking.
 | Env var | Default | Effect |
 |---------|---------|--------|
 | `RETRO_HUD_FRAME` | `1` | Set `0` to disable the right-edge frame fill |
-| `RETRO_HUD_COUNTDOWN_PCT` | `75` | Rate-limit % at which reset countdowns appear |
+| `RETRO_HUD_COUNTDOWN_PCT` | `75` | Rate-limit % at which the combined `81% · 3d` label appears |
+| `RETRO_HUD_RL_MODE` | `cycle` | Rate-limit labels: `cycle` alternates % ↔ time-to-reset every 30s; `pct`, `time`, or `both` pin one style |
 
 Set them in the `env` block of `~/.claude/settings.json`.
 
