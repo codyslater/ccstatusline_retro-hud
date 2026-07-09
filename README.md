@@ -2,10 +2,6 @@
 
 A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude-code).
 
-![retro-hud](retro-hud.png)
-
-Live in a Claude Code session — alien on patrol, gauges flexed, frame closed:
-
 ![retro-hud running live in Claude Code](retro-hud-live.png)
 
 ## Features
