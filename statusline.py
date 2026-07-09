@@ -29,7 +29,7 @@ cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
 "81% · 3d"; in the red zone (>=90%) it switches to time-to-reset only —
 the gauge itself already shows the saturation. "both" mode opts out.
 """
-__version__ = "2.4.0"
+__version__ = "2.4.1"
 
 import json
 import os
@@ -351,7 +351,7 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0):
     fill = "─" * track
     if alien_pct is not None and track >= 10:
         mood = 0 if alien_pct < WARN_PCT else (1 if alien_pct < RED_PCT else 2)
-        tick = now // 30
+        tick = now // 10  # struts every 10s; visible with a short refreshInterval
         sprite = ALIEN_FRAMES[mood][tick % 2]
         color = (NEON_GREEN, NEON_ORG, NEON_RED)[mood]
         span = track - len(sprite)
@@ -529,10 +529,11 @@ def render(data, cols, now):
             return pct_lbl + " · " + fmt_countdown(left)
         lbl = fmt_countdown(left) if time_phase else pct_lbl
         if rl_mode == "cycle":
-            # Pad to the wider of the two variants so the row doesn't
-            # reflow when the cycle flips; pad on the outer side so the
-            # label stays snug against its gauge.
-            w = max(vwidth(pct_lbl), vwidth(fmt_countdown(left)))
+            # Reserve a fixed 5-column slot (fits "4h59m"/"6d23h"/"100%")
+            # so the footprint never changes as the cycle flips or the
+            # countdown text shrinks; pad on the outer side so the label
+            # stays snug against its gauge.
+            w = max(5, vwidth(lbl))
             lbl = lbl.rjust(w) if outer == "l" else lbl.ljust(w)
         return lbl
 

@@ -4,6 +4,20 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.4.1] — 2026-07-08
+
+### Fixed
+- Cycling rate-limit labels now reserve a fixed 5-column slot instead of
+  padding to the current labels' max, so the blank space is identical in
+  every phase and the row never reflows as countdown text lengthens or
+  shrinks (`2h` vs `1h59m`).
+
+### Changed
+- Installer default `refreshInterval` lowered 30s → 5s so the frame
+  re-fits within seconds of a terminal resize (Claude Code doesn't
+  re-run the statusline on resize). Countdown flips stay on a 30s cycle.
+- The alien now walks on a 10s tick, making the faster refresh visible.
+
 ## [v2.4.0] — 2026-07-08
 
 ### Changed

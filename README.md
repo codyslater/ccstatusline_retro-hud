@@ -77,13 +77,15 @@ Copy `statusline.py` and `statusline-command.sh` to `~/.claude/`, then add to `~
   "statusLine": {
     "type": "command",
     "command": "bash ~/.claude/statusline-command.sh",
-    "refreshInterval": 30
+    "refreshInterval": 5
   }
 }
 ```
 
-`refreshInterval` is optional; it re-renders every 30s while idle so the
-rate-limit countdowns keep ticking.
+`refreshInterval` is optional but recommended: it re-renders every 5s while
+idle so rate-limit countdowns tick, the alien patrols, and the frame adapts
+shortly after a terminal resize (Claude Code doesn't re-run the statusline
+on resize, so the interval is what picks up the new width).
 
 ## Configuration
 
