@@ -137,6 +137,21 @@ class TestContent(unittest.TestCase):
         finally:
             del os.environ["RETRO_HUD_RL_MODE"]
 
+    def test_cycle_footprint_constant(self):
+        # The reserved label slot must make row 2 the same width in every
+        # phase (frame disabled so padding can't mask a reflow). The 7d
+        # reset is pinned so its combined label's countdown stays in one
+        # text class ("3dXh") — only real data changes may move the row.
+        payload = copy.deepcopy(FULL)
+        payload["rate_limits"]["seven_day"]["resets_at"] = NOW + 266400
+        os.environ["RETRO_HUD_FRAME"] = "0"
+        try:
+            widths = {sl.vislen(sl.render(copy.deepcopy(payload), 220, t)[1])
+                      for t in (NOW, NOW + 30, NOW + 60, NOW + 3570)}
+            self.assertEqual(len(widths), 1, widths)
+        finally:
+            del os.environ["RETRO_HUD_FRAME"]
+
     def test_rl_mode_env_pins_phase(self):
         os.environ["RETRO_HUD_RL_MODE"] = "pct"
         try:

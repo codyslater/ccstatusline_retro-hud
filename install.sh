@@ -33,7 +33,7 @@ except ValueError:
 data['statusLine'] = {
     'type': 'command',
     'command': 'bash %s/statusline-command.sh' % claude_dir,
-    'refreshInterval': 30,
+    'refreshInterval': 5,
 }
 with open(settings_path, 'w') as f:
     json.dump(data, f, indent=2)
@@ -46,7 +46,7 @@ else
   "statusLine": {
     "type": "command",
     "command": "bash $CLAUDE_DIR/statusline-command.sh",
-    "refreshInterval": 30
+    "refreshInterval": 5
   }
 }
 EOF
