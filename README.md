@@ -4,6 +4,10 @@ A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude
 
 ![retro-hud](retro-hud.png)
 
+Live in a Claude Code session — alien on patrol, gauges flexed, frame closed:
+
+![retro-hud running live in Claude Code](retro-hud-live.png)
+
 ## Features
 
 - Two-row HUD with a full $\color{#00ff00}{\textsf{green}}$ wireframe — corner brackets on both edges, joined by a dim rule
