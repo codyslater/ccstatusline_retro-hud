@@ -4,6 +4,14 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.2.0] — 2026-07-08
+
+### Changed
+- Rate-limit labels now escalate per window: calm → cycling % ↔ time
+  (v2.1.0 behavior), ≥75% → combined `81% · 3d`, red zone (≥90%) →
+  time-to-reset only, since the gauge itself already shows saturation.
+  `RETRO_HUD_RL_MODE=both` opts out of the red-zone override.
+
 ## [v2.1.0] — 2026-07-08
 
 ### Added

@@ -10,7 +10,7 @@ A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude
 - $\color{#00ffff}{\textsf{Neon cyan}}$ `//` separators
 - Zoned context gauge: $\color{#00ff00}{\textsf{green}}$ / $\color{#ff8700}{\textsf{amber}}$ / $\color{#ff0000}{\textsf{red}}$ zones tinted into the empty track like a redlined instrument, fractional-block fill with sub-character precision
 - Context tokens next to the gauge (`42% 84.2K/200K`), aware of 200K vs 1M context windows
-- Mirrored rate-limit gauges ($\color{#0087ff}{\textsf{blue}}$ 5h ← | → $\color{#af5fff}{\textsf{violet}}$ 7d) whose labels alternate between usage % and time-to-reset every 30s; above 75% usage both are shown together — hidden entirely on plans without rate limits
+- Mirrored rate-limit gauges ($\color{#0087ff}{\textsf{blue}}$ 5h ← | → $\color{#af5fff}{\textsf{violet}}$ 7d) with escalating labels: calm windows alternate between usage % and time-to-reset every 30s, above 75% both are shown together (`81% · 3d`), and in the $\color{#ff0000}{\textsf{red zone}}$ (≥90%) the label switches to time-to-reset only — hidden entirely on plans without rate limits
 - Git branch badge with clickable repo link (OSC 8), read directly from `.git` — no subprocess, works in worktrees and on detached HEADs
 - PR badge (`#42✓`) colored by review state, hyperlinked to the PR
 - Effort-level dot in the model box (`·` `•` `●` `⬤` `✦`) and `✧` when extended thinking is on

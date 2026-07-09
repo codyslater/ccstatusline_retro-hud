@@ -100,6 +100,24 @@ class TestContent(unittest.TestCase):
         self.assertNotIn("63%", plain)
         self.assertIn("81% ·", plain)     # urgent side still shows both
 
+    def test_red_zone_shows_countdown_only(self):
+        hot = copy.deepcopy(FULL)
+        hot["rate_limits"]["five_hour"]["used_percentage"] = 95
+        plain = sl.strip_ansi(sl.render(hot, 220, NOW)[1])
+        self.assertNotIn("95%", plain)    # red zone drops the redundant %
+        self.assertIn("2h", plain)        # ...and shows the reset countdown
+        self.assertIn("81% ·", plain)     # 7d at 81% keeps the combined label
+
+    def test_red_zone_both_mode_opts_out(self):
+        hot = copy.deepcopy(FULL)
+        hot["rate_limits"]["five_hour"]["used_percentage"] = 95
+        os.environ["RETRO_HUD_RL_MODE"] = "both"
+        try:
+            plain = sl.strip_ansi(sl.render(hot, 220, NOW)[1])
+            self.assertIn("95% ·", plain)
+        finally:
+            del os.environ["RETRO_HUD_RL_MODE"]
+
     def test_rl_mode_env_pins_phase(self):
         os.environ["RETRO_HUD_RL_MODE"] = "pct"
         try:
