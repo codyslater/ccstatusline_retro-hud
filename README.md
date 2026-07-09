@@ -16,6 +16,7 @@ A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude
 - Effort-level dot in the model box (`·` `•` `●` `⬤` `✦`) and `✧` when extended thinking is on
 - Vim mode badge (`[N]` `[I]` `[V]`) when vim mode is enabled
 - Lines added/removed, session cost, duration, prompt-cache hit rate (wide terminals), session name, and agent/worktree indicators
+- A resident alien 👾 patrols the top frame rule, ping-ponging along it as the HUD refreshes; it gets agitated 👽 and doubles speed when any gauge passes 70%, and calls in the mothership 🛸 at 4× speed in the red zone (`RETRO_HUD_ALIEN=0` to ground it)
 - Width-aware progressive degradation: segments truncate, then drop, in priority order — rows never overflow the terminal
 - Double-width emoji handling for accurate alignment; crash-proof against missing or malformed payload fields
 
@@ -91,6 +92,7 @@ rate-limit countdowns keep ticking.
 | `RETRO_HUD_FRAME` | `1` | Set `0` to disable the right-edge frame fill |
 | `RETRO_HUD_COUNTDOWN_PCT` | `75` | Rate-limit % at which the combined `81% · 3d` label appears |
 | `RETRO_HUD_RL_MODE` | `cycle` | Rate-limit labels: `cycle` alternates % ↔ time-to-reset every 30s; `pct`, `time`, or `both` pin one style |
+| `RETRO_HUD_ALIEN` | `1` | Set `0` to ground the alien patrolling the top rule |
 
 Set them in the `env` block of `~/.claude/settings.json`.
 

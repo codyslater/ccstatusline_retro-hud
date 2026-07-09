@@ -4,6 +4,14 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.3.0] — 2026-07-08
+
+### Added
+- A resident alien 👾 patrols the top frame rule, moving one step per
+  30s refresh tick. It reacts to the worst gauge (context or either rate
+  limit): past 70% it turns 👽 and doubles speed; in the red zone the
+  mothership 🛸 arrives at 4× speed. Disable with `RETRO_HUD_ALIEN=0`.
+
 ## [v2.2.0] — 2026-07-08
 
 ### Changed

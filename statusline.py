@@ -14,13 +14,14 @@ Env toggles:
     RETRO_HUD_COUNTDOWN_PCT=75   rate-limit % at which reset countdowns appear
     RETRO_HUD_RL_MODE=cycle      rate-limit labels: cycle (alternate % and
                                  time-to-reset every 30s), pct, time, or both
+    RETRO_HUD_ALIEN=0            ground the alien that patrols the top rule
 
 Rate-limit label escalation: below the countdown threshold the label
 cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
 "81% · 3d"; in the red zone (>=90%) it switches to time-to-reset only —
 the gauge itself already shows the saturation. "both" mode opts out.
 """
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 import json
 import os
@@ -69,6 +70,8 @@ EFFORT_COLORS = {"low": DIM, "medium": NEON_CYAN, "high": NEON_YEL,
                  "xhigh": NEON_ORG, "max": NEON_PINK}
 PR_STATE = {"approved": (NEON_GREEN, "✓"), "pending": (NEON_YEL, "○"),
             "changes_requested": (NEON_RED, "✗"), "draft": (DIM, "◌")}
+ALIEN_SPRITES = ("👾", "👽", "🛸")   # calm / agitated / red-zone mothership
+ALIEN_SPEEDS = (1, 2, 4)             # rule-cells per 30s tick
 VIM_COLORS = {"NORMAL": NEON_CYAN, "INSERT": NEON_GREEN,
               "VISUAL": NEON_PINK, "VISUAL LINE": NEON_PINK}
 
@@ -315,13 +318,25 @@ def _join(prefix, segs):
     return prefix + SEP.join(s for s in segs if s)
 
 
-def _frame(row, cols, corner, frame_on):
-    """Pad with a dim rule and close the frame at the right edge."""
+def _frame(row, cols, corner, frame_on, alien_pct=None, now=0):
+    """Pad with a dim rule and close the frame at the right edge.
+
+    When alien_pct is given (and the rule is long enough), an alien
+    patrols the rule: it ping-pongs one cell per 30s tick, walks faster
+    as the worst gauge climbs, and escalates 👾 → 👽 → 🛸 by zone.
+    """
     gap = cols - vislen(row)
     if not frame_on or gap < 2:
         return row
-    return "{} {}{}{}{}{}{}".format(
-        row, RULE, "─" * (gap - 2), R, NEON_GREEN, corner, R)
+    track = gap - 2  # rule cells between the leading space and the corner
+    fill = "─" * track
+    if alien_pct is not None and track >= 8:
+        mood = 0 if alien_pct < WARN_PCT else (1 if alien_pct < RED_PCT else 2)
+        span = track - 2  # sprite is 2 cells wide
+        t = (now // 30) * ALIEN_SPEEDS[mood] % (2 * span)
+        pos = t if t <= span else 2 * span - t
+        fill = "─" * pos + ALIEN_SPRITES[mood] + "─" * (span - pos)
+    return "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, corner, R)
 
 
 def render(data, cols, now):
@@ -537,7 +552,13 @@ def render(data, cols, now):
         else:
             show_dur = False
 
-    return [_frame(row1, cols, "┐", frame_on),
+    alien_pct = None
+    if os.environ.get("RETRO_HUD_ALIEN", "1") != "0":
+        alien_pct = max(clamp(ctx_pct, 0, 100),
+                        clamp(rl5_pct, 0, 100) if has_rl else 0,
+                        clamp(rl7_pct, 0, 100) if has_rl else 0)
+
+    return [_frame(row1, cols, "┐", frame_on, alien_pct, now),
             _frame(row2, cols, "┘", frame_on)]
 
 
