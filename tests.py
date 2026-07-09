@@ -19,11 +19,11 @@ FULL = {
     "effort": {"level": "high"},
     "thinking": {"enabled": True},
     "vim": {"mode": "INSERT"},
-    "context_window": {"used_percentage": 42, "total_input_tokens": 84213,
+    "context_window": {"used_percentage": 72, "total_input_tokens": 144213,
                        "context_window_size": 200000,
-                       "current_usage": {"input_tokens": 1900,
-                                         "cache_read_input_tokens": 79800,
-                                         "cache_creation_input_tokens": 2513,
+                       "current_usage": {"input_tokens": 2900,
+                                         "cache_read_input_tokens": 137300,
+                                         "cache_creation_input_tokens": 4013,
                                          "output_tokens": 1150}},
     "cost": {"total_cost_usd": 3.21, "total_duration_ms": 5432100,
              "total_lines_added": 128, "total_lines_removed": 37},
@@ -81,10 +81,28 @@ class TestContent(unittest.TestCase):
     def test_full_payload_segments(self):
         plain = "\n".join(sl.strip_ansi(r) for r in sl.render(copy.deepcopy(FULL), 220, NOW))
         for expect in ("Fable 5", "●", "✧", "some-long-project-name", "#42✓",
-                       "[I]", "◈ my-session", "42%", "84.2K/200K", "63%", "81%",
-                       "· 3d", "+128", "-37", "cache 94%", "T:1h30m", "$3.21",
+                       "[I]", "◈ my-session", "72%", "144.2K/200K", "63%", "81%",
+                       "· 3d", "+128", "-37", "cache 95%", "T:1h30m", "$3.21",
                        "▐█ reviewer"):
             self.assertIn(expect, plain, "missing {!r} in:\n{}".format(expect, plain))
+
+    def test_ctx_tokens_auto_hides_when_calm(self):
+        calm = copy.deepcopy(FULL)
+        calm["context_window"]["used_percentage"] = 42
+        plain = sl.strip_ansi(sl.render(calm, 220, NOW)[1])
+        self.assertNotIn("144.2K", plain)   # auto: hidden below amber zone
+        os.environ["RETRO_HUD_CTX_TOKENS"] = "always"
+        try:
+            plain = sl.strip_ansi(sl.render(copy.deepcopy(calm), 220, NOW)[1])
+            self.assertIn("144.2K/200K", plain)
+        finally:
+            del os.environ["RETRO_HUD_CTX_TOKENS"]
+
+    def test_session_name_capped(self):
+        longname = copy.deepcopy(FULL)
+        longname["session_name"] = "Polish HUD design and prepare production release"
+        plain = sl.strip_ansi(sl.render(longname, 220, NOW)[0])
+        self.assertIn("◈ Polish HUD design and prep..", plain)
 
     def test_countdown_gated_below_threshold(self):
         # NOW // 30 is even → percentage phase of the cycle
@@ -103,6 +121,7 @@ class TestContent(unittest.TestCase):
     def test_red_zone_shows_countdown_only(self):
         hot = copy.deepcopy(FULL)
         hot["rate_limits"]["five_hour"]["used_percentage"] = 95
+        del hot["context_window"]["current_usage"]  # no "cache 95%" collision
         plain = sl.strip_ansi(sl.render(hot, 220, NOW)[1])
         self.assertNotIn("95%", plain)    # red zone drops the redundant %
         self.assertIn("2h", plain)        # ...and shows the reset countdown
@@ -145,17 +164,19 @@ class TestContent(unittest.TestCase):
 
 class TestAlien(unittest.TestCase):
     def test_mood_escalates_with_worst_gauge(self):
-        # FULL: worst gauge is 7d at 81% → agitated 👽
-        self.assertIn("👽", sl.strip_ansi(sl.render(copy.deepcopy(FULL), 200, NOW)[0]))
-        # MINIMAL: everything at 0 → calm 👾
-        self.assertIn("👾", sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0]))
-        # OVERLOAD: rate limit at 250% → red-zone 🛸
-        self.assertIn("🛸", sl.strip_ansi(sl.render(copy.deepcopy(OVERLOAD), 200, NOW)[0]))
+        # NOW tick is even → first blink frame of each mood
+        # FULL: worst gauge is 7d at 81% → agitated
+        self.assertIn(">o.o<", sl.strip_ansi(sl.render(copy.deepcopy(FULL), 200, NOW)[0]))
+        # MINIMAL: everything at 0 → calm
+        self.assertIn("/o.o\\", sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0]))
+        # OVERLOAD: rate limit at 250% → red zone, arms up
+        self.assertIn("\\o.o/", sl.strip_ansi(sl.render(copy.deepcopy(OVERLOAD), 200, NOW)[0]))
 
-    def test_alien_patrols_over_time(self):
+    def test_alien_patrols_and_blinks(self):
         r1 = sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0]
         r2 = sl.render(copy.deepcopy(MINIMAL), 200, NOW + 30)[0]
-        self.assertNotEqual(r1, r2)                    # it moved
+        self.assertNotEqual(r1, r2)                     # it moved
+        self.assertIn("/-.-\\", sl.strip_ansi(r2))      # odd tick → blink frame
         self.assertEqual(sl.vislen(r1), sl.vislen(r2))  # width unchanged
         self.assertEqual(sl.vislen(r1), 200)
 
@@ -163,7 +184,7 @@ class TestAlien(unittest.TestCase):
         os.environ["RETRO_HUD_ALIEN"] = "0"
         try:
             plain = sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0])
-            self.assertNotIn("👾", plain)
+            self.assertNotIn("o.o", plain)
             self.assertTrue(plain.endswith("┐"))  # frame still closes
         finally:
             del os.environ["RETRO_HUD_ALIEN"]
@@ -171,8 +192,44 @@ class TestAlien(unittest.TestCase):
     def test_alien_skipped_on_short_track(self):
         # A narrow terminal leaves no rule to patrol — no crash, no alien
         plain = sl.strip_ansi(sl.render(copy.deepcopy(FULL), 60, NOW)[0])
-        for sprite in ("👾", "👽", "🛸"):
-            self.assertNotIn(sprite, plain)
+        self.assertNotIn("o.o", plain)
+
+    def test_emoji_knob(self):
+        os.environ["RETRO_HUD_EMOJI"] = "0"
+        try:
+            plain = sl.strip_ansi(sl.render(copy.deepcopy(FULL), 200, NOW)[0])
+            self.assertNotIn("\U0001F4C2", plain)  # folder icon dropped
+        finally:
+            del os.environ["RETRO_HUD_EMOJI"]
+        os.environ["RETRO_HUD_EMOJI"] = "1"
+        try:
+            row = sl.render(copy.deepcopy(FULL), 200, NOW)[0]
+            self.assertEqual(sl.vislen(row), 200)  # emoji counted as 1 cell
+        finally:
+            del os.environ["RETRO_HUD_EMOJI"]
+
+
+class TestWidthKnobs(unittest.TestCase):
+    SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
+
+    def run_script(self, env_extra):
+        env = dict(os.environ, COLUMNS="120")
+        env.update(env_extra)
+        return subprocess.run([sys.executable, self.SCRIPT], input=b"{}",
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=env, timeout=10)
+
+    def test_default_margin(self):
+        out = self.run_script({}).stdout.decode()
+        widths = [sl.vislen(line) for line in out.splitlines()]
+        self.assertEqual(max(widths), 117)  # 120 − default margin 3
+
+    def test_margin_and_width_overrides(self):
+        out = self.run_script({"RETRO_HUD_MARGIN": "5"}).stdout.decode()
+        self.assertEqual(max(sl.vislen(l) for l in out.splitlines()), 115)
+        out = self.run_script({"RETRO_HUD_WIDTH": "80",
+                               "RETRO_HUD_MARGIN": "0"}).stdout.decode()
+        self.assertEqual(max(sl.vislen(l) for l in out.splitlines()), 80)
 
 
 class TestHelpers(unittest.TestCase):
