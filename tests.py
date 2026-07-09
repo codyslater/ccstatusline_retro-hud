@@ -2,6 +2,7 @@
 """retro-hud test suite — stdlib only. Run: python3 tests.py"""
 import copy
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -137,18 +138,28 @@ class TestContent(unittest.TestCase):
         finally:
             del os.environ["RETRO_HUD_RL_MODE"]
 
-    def test_cycle_footprint_constant(self):
-        # The reserved label slot must make row 2 the same width in every
-        # phase (frame disabled so padding can't mask a reflow). The 7d
-        # reset is pinned so its combined label's countdown stays in one
-        # text class ("3dXh") — only real data changes may move the row.
+    def test_cycle_labels_tight_and_gauges_flex(self):
+        # Cycling labels carry no padding blanks — instead each gauge
+        # stretches to absorb its label's phase width difference, so the
+        # segment footprint is identical in both phases.
         payload = copy.deepcopy(FULL)
-        payload["rate_limits"]["seven_day"]["resets_at"] = NOW + 266400
+        payload["rate_limits"] = {
+            "five_hour": {"used_percentage": 35, "resets_at": NOW + 9930},
+            "seven_day": {"used_percentage": 9, "resets_at": NOW + 536400}}
+        pct_row = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW)[1])
+        time_row = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW + 30)[1])
+        self.assertIn("// 35%", pct_row)                 # tight after separator
+        self.assertIsNone(re.search(r"//\s{2,}35%", pct_row))
+        self.assertIsNone(re.search(r"9%\s{2,}//", pct_row))
+        self.assertIn("// " + sl.fmt_countdown(9900), time_row)
+        # constant footprint: with the frame off, both phases are equal
+        # width, and the divider sits at the same column
         os.environ["RETRO_HUD_FRAME"] = "0"
         try:
-            widths = {sl.vislen(sl.render(copy.deepcopy(payload), 220, t)[1])
-                      for t in (NOW, NOW + 30, NOW + 60, NOW + 3570)}
-            self.assertEqual(len(widths), 1, widths)
+            p = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW)[1])
+            t = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW + 30)[1])
+            self.assertEqual(sl.vwidth(p), sl.vwidth(t))
+            self.assertEqual(p.index("|"), t.index("|"))
         finally:
             del os.environ["RETRO_HUD_FRAME"]
 
