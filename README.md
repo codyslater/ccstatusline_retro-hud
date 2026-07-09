@@ -10,10 +10,10 @@ A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude
 - $\color{#00ffff}{\textsf{Neon cyan}}$ `//` separators
 - Zoned context gauge: $\color{#00ff00}{\textsf{green}}$ / $\color{#ff8700}{\textsf{amber}}$ / $\color{#ff0000}{\textsf{red}}$ zones tinted into the empty track like a redlined instrument, fractional-block fill with sub-character precision
 - Contextual token readout: the gauge shows just `42%` while calm, and reveals `72% 144.2K/200K` once you enter the amber zone — when remaining headroom becomes an actionable number (aware of 200K vs 1M windows; pin with `RETRO_HUD_CTX_TOKENS=always|never`)
-- Mirrored rate-limit gauges ($\color{#0087ff}{\textsf{blue}}$ 5h ← | → $\color{#af5fff}{\textsf{violet}}$ 7d) with escalating labels: calm windows alternate between usage % and time-to-reset every 30s, above 75% both are shown together (`81% · 3d`), and in the $\color{#ff0000}{\textsf{red zone}}$ (≥90%) the label switches to time-to-reset only — hidden entirely on plans without rate limits
+- Mirrored rate-limit gauges ($\color{#0087ff}{\textsf{blue}}$ 5h ← | → $\color{#af5fff}{\textsf{violet}}$ 7d) with escalating labels: calm windows alternate between usage % and time-to-reset every 30s — each gauge stretching to absorb its label's width difference so nothing shifts on a flip — above 75% both are shown together (`81% · 3d`), and in the $\color{#ff0000}{\textsf{red zone}}$ (≥90%) the label switches to time-to-reset only. Hidden entirely on plans without rate limits
 - Git branch badge with clickable repo link (OSC 8), read directly from `.git` — no subprocess, works in worktrees and on detached HEADs
 - PR badge (`#42✓`) colored by review state, hyperlinked to the PR
-- Effort-level dot in the model box (`·` `•` `●` `⬤` `✦`) and `✧` when extended thinking is on
+- Effort-level dot in the model box (`·` `•` `●` `◉` `✦`) and `✧` when extended thinking is on
 - Vim mode badge (`[N]` `[I]` `[V]`) when vim mode is enabled
 - Lines added/removed, session cost, duration, prompt-cache hit rate (wide terminals), session name, and agent/worktree indicators
 - A resident text-art alien patrols the top frame rule, blinking as it ping-pongs along: calm and $\color{#00ff00}{\textsf{green}}$ `/o.o\` while all gauges are quiet, $\color{#ff8700}{\textsf{amber}}$ and fanged `>o.o<` at double speed past 70%, arms-up $\color{#ff0000}{\textsf{red}}$ `\o.o/` at 4× in the red zone (`RETRO_HUD_ALIEN=0` to ground it)
@@ -24,7 +24,7 @@ A retro sci-fi HUD status line theme for [Claude Code](https://claude.com/claude
 
 | Field | Color | Symbol |
 |-------|-------|--------|
-| Model + effort + thinking | white in $\color{#00ff00}{\textsf{green}}$ `[ ]` box | `·` `•` `●` `⬤` `✦`, `✧` |
+| Model + effort + thinking | white in $\color{#00ff00}{\textsf{green}}$ `[ ]` box | `·` `•` `●` `◉` `✦`, `✧` |
 | Working directory | white | `📂` |
 | Git branch (linked) | white on $\color{#af00ff}{\textsf{purple}}$ badge | `⎇` |
 | Pull request (linked) | $\color{#00ff00}{\textsf{green}}$ / $\color{#ffff00}{\textsf{yellow}}$ / $\color{#ff0000}{\textsf{red}}$ by review state | `#42✓` |
