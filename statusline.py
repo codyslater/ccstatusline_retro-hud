@@ -14,8 +14,13 @@ Env toggles:
     RETRO_HUD_COUNTDOWN_PCT=75   rate-limit % at which reset countdowns appear
     RETRO_HUD_RL_MODE=cycle      rate-limit labels: cycle (alternate % and
                                  time-to-reset every 30s), pct, time, or both
+
+Rate-limit label escalation: below the countdown threshold the label
+cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
+"81% · 3d"; in the red zone (>=90%) it switches to time-to-reset only —
+the gauge itself already shows the saturation. "both" mode opts out.
 """
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 import json
 import os
@@ -50,6 +55,8 @@ RL_7D_EC = "\033[38;5;54m"
 
 # context gauge zone tints (empty-cell backgrounds: green / amber / red zones)
 ZONE_EC = ("\033[38;5;22m", "\033[38;5;58m", "\033[38;5;52m")
+WARN_PCT = 70   # amber zone starts
+RED_PCT = 90    # red zone starts
 
 SEP = " " + NEON_CYAN + "//" + R + " "
 
@@ -225,9 +232,9 @@ def _origin_url(cwd):
 
 # ── gauge rendering ──
 def zone_color(pos_pct):
-    if pos_pct < 70:
+    if pos_pct < WARN_PCT:
         return NEON_GREEN, ZONE_EC[0]
-    if pos_pct < 90:
+    if pos_pct < RED_PCT:
         return NEON_ORG, ZONE_EC[1]
     return NEON_RED, ZONE_EC[2]
 
@@ -251,17 +258,17 @@ def ctx_gauge(pct, bar_len):
 
 
 def value_color(pct):
-    if pct < 70:
+    if pct < WARN_PCT:
         return NEON_GREEN
-    if pct < 90:
+    if pct < RED_PCT:
         return NEON_ORG
     return NEON_RED
 
 
 def rate_mirror(pct_5h, pct_7d, bar_len, lbl_5h, lbl_7d):
     """5h gauge fills right-to-left, 7d left-to-right, meeting at center."""
-    fc_5h = value_color(pct_5h) if pct_5h >= 70 else RL_5H_FC
-    fc_7d = value_color(pct_7d) if pct_7d >= 70 else RL_7D_FC
+    fc_5h = value_color(pct_5h) if pct_5h >= WARN_PCT else RL_5H_FC
+    fc_7d = value_color(pct_7d) if pct_7d >= WARN_PCT else RL_7D_FC
     bg_5h = RL_5H_EC.replace("38;5;", "48;5;")
     bg_7d = RL_7D_EC.replace("38;5;", "48;5;")
     bg_fc_5h = fc_5h.replace("1;38;5;", "48;5;").replace("38;5;", "48;5;")
@@ -461,9 +468,13 @@ def render(data, cols, now):
     time_phase = rl_mode == "time" or (rl_mode == "cycle" and (now // 30) % 2 == 1)
 
     def rl_label(pct, left, reset, rich):
+        # Escalation ladder: calm → cycle/pinned; ≥ cd_pct → "81% · 3d";
+        # red zone → countdown only (the bar already screams the %).
         pct_lbl = "{}%".format(clamp(pct, 0, 999))
         if not reset:
             return pct_lbl
+        if pct >= RED_PCT and rl_mode != "both":
+            return fmt_countdown(left)
         if rich and (pct >= cd_pct or rl_mode == "both"):
             return pct_lbl + " · " + fmt_countdown(left)
         return fmt_countdown(left) if time_phase else pct_lbl
