@@ -15,13 +15,21 @@ Env toggles:
     RETRO_HUD_RL_MODE=cycle      rate-limit labels: cycle (alternate % and
                                  time-to-reset every 30s), pct, time, or both
     RETRO_HUD_ALIEN=0            ground the alien that patrols the top rule
+    RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
+                                 always, or never
+    RETRO_HUD_MARGIN=3           columns kept free at the right edge (raise if
+                                 your terminal truncates lines with an ellipsis)
+    RETRO_HUD_WIDTH=<cols>       hard width override when $COLUMNS lies
+    RETRO_HUD_EMOJI=2            2: emoji are two cells (normal); 1: count them
+                                 as one cell (some WSL/VS Code terminals);
+                                 0: skip the folder emoji entirely
 
 Rate-limit label escalation: below the countdown threshold the label
 cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
 "81% · 3d"; in the red zone (>=90%) it switches to time-to-reset only —
 the gauge itself already shows the saturation. "both" mode opts out.
 """
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 import json
 import os
@@ -65,13 +73,23 @@ _FULL = "█"
 _FRAC = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
 
 EFFORT_GLYPHS = {"low": "·", "medium": "•", "high": "●",
-                 "xhigh": "⬤", "max": "✦"}
+                 "xhigh": "◉", "max": "✦"}
 EFFORT_COLORS = {"low": DIM, "medium": NEON_CYAN, "high": NEON_YEL,
                  "xhigh": NEON_ORG, "max": NEON_PINK}
 PR_STATE = {"approved": (NEON_GREEN, "✓"), "pending": (NEON_YEL, "○"),
             "changes_requested": (NEON_RED, "✗"), "draft": (DIM, "◌")}
-ALIEN_SPRITES = ("👾", "👽", "🛸")   # calm / agitated / red-zone mothership
-ALIEN_SPEEDS = (1, 2, 4)             # rule-cells per 30s tick
+# ASCII text-art alien: two blink frames per mood, all width-5 so the
+# frame math never shifts. Calm cruises, agitated bares fangs, red-zone
+# throws its arms up.
+ALIEN_FRAMES = (("/o.o\\", "/-.-\\"),
+                (">o.o<", ">-.-<"),
+                ("\\o.o/", "\\O.O/"))
+ALIEN_SPEEDS = (1, 2, 4)  # rule-cells per 30s tick
+
+# How many cells the terminal advances for emoji (EAW Wide/Fullwidth).
+# Correct terminals use 2; some WSL/VS Code setups advance only 1 —
+# RETRO_HUD_EMOJI=1 makes our accounting match them.
+_EMOJI_W = 2
 VIM_COLORS = {"NORMAL": NEON_CYAN, "INSERT": NEON_GREEN,
               "VISUAL": NEON_PINK, "VISUAL LINE": NEON_PINK}
 
@@ -87,7 +105,7 @@ def vwidth(s):
     """Visible width accounting for double-width chars (emoji, CJK)."""
     w = 0
     for ch in s:
-        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        w += _EMOJI_W if unicodedata.east_asian_width(ch) in ("W", "F") else 1
     return w
 
 
@@ -103,7 +121,7 @@ def trunc(s, maxw):
         return s[:maxw]
     out, w = "", 0
     for ch in s:
-        cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        cw = vwidth(ch)
         if w + cw > maxw - 2:
             break
         out += ch
@@ -321,28 +339,37 @@ def _join(prefix, segs):
 def _frame(row, cols, corner, frame_on, alien_pct=None, now=0):
     """Pad with a dim rule and close the frame at the right edge.
 
-    When alien_pct is given (and the rule is long enough), an alien
-    patrols the rule: it ping-pongs one cell per 30s tick, walks faster
-    as the worst gauge climbs, and escalates 👾 → 👽 → 🛸 by zone.
+    When alien_pct is given (and the rule is long enough), a text-art
+    alien patrols the rule: it ping-pongs along it, blinking each 30s
+    tick, walks faster as the worst gauge climbs, and its face and
+    color escalate green → amber → red with that gauge's zone.
     """
     gap = cols - vislen(row)
     if not frame_on or gap < 2:
         return row
     track = gap - 2  # rule cells between the leading space and the corner
     fill = "─" * track
-    if alien_pct is not None and track >= 8:
+    if alien_pct is not None and track >= 10:
         mood = 0 if alien_pct < WARN_PCT else (1 if alien_pct < RED_PCT else 2)
-        span = track - 2  # sprite is 2 cells wide
-        t = (now // 30) * ALIEN_SPEEDS[mood] % (2 * span)
+        tick = now // 30
+        sprite = ALIEN_FRAMES[mood][tick % 2]
+        color = (NEON_GREEN, NEON_ORG, NEON_RED)[mood]
+        span = track - len(sprite)
+        t = tick * ALIEN_SPEEDS[mood] % (2 * span)
         pos = t if t <= span else 2 * span - t
-        fill = "─" * pos + ALIEN_SPRITES[mood] + "─" * (span - pos)
+        fill = "{}{}{}{}{}{}".format("─" * pos, R + color, sprite,
+                                     R + RULE, "─" * (span - pos), "")
     return "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, corner, R)
 
 
 def render(data, cols, now):
     """Return [row1, row2] sized to cols."""
+    global _EMOJI_W
     frame_on = os.environ.get("RETRO_HUD_FRAME", "1") != "0"
     cd_pct = num(os.environ.get("RETRO_HUD_COUNTDOWN_PCT"), 75)
+    emoji_mode = os.environ.get("RETRO_HUD_EMOJI", "2")
+    _EMOJI_W = 1 if emoji_mode == "1" else 2
+    ctx_tok_mode = os.environ.get("RETRO_HUD_CTX_TOKENS", "auto")
 
     # ── extract fields ──
     cwd = str(dig(data, "workspace", "current_dir") or data.get("cwd") or "~")
@@ -415,7 +442,8 @@ def render(data, cols, now):
         return "{}[{} {} {}]{}".format(MODEL_BOX, R, inner, MODEL_BOX, R)
 
     def dir_seg(name):
-        return NEON_WHT + "\U0001F4C2 " + name + R
+        icon = "\U0001F4C2 " if emoji_mode != "0" else ""
+        return NEON_WHT + icon + name + R
 
     def branch_seg(name):
         return "{} ⎇ {} {}".format(BRANCH_BADGE, link(gh_url, name), R)
@@ -430,7 +458,9 @@ def render(data, cols, now):
     def session_seg(name):
         return DIM + "◈ " + name + R
 
-    t_model, t_dir, t_branch, t_session = model, dir_name, branch, session_name
+    # Auto-generated session names run long — cap them before layout.
+    t_model, t_dir, t_branch = model, dir_name, branch
+    t_session = trunc(session_name, 28)
     show_pr, show_vim, show_session = pr_num > 0, bool(vim_mode), bool(session_name)
 
     for step in range(9):
@@ -468,6 +498,11 @@ def render(data, cols, now):
     # ═══ ROW 2 ═══
     def ctx_seg(tok_mode):
         # tok_mode: 2 = "42% 87.3K/200K", 1 = "42% 87.3K", 0 = "42%"
+        # "auto" shows tokens only from the amber zone up — that's when
+        # remaining headroom becomes an actionable number.
+        if ctx_tok_mode == "never" or \
+                (ctx_tok_mode == "auto" and clamp(ctx_pct, 0, 999) < WARN_PCT):
+            tok_mode = 0
         c = value_color(clamp(ctx_pct, 0, 100))
         s = "{} {}{}%{}".format(ctx_gauge(ctx_pct, ctx_len), c, clamp(ctx_pct, 0, 999), R)
         if tok_mode and ctx_tok:
@@ -482,7 +517,7 @@ def render(data, cols, now):
         rl_mode = "cycle"
     time_phase = rl_mode == "time" or (rl_mode == "cycle" and (now // 30) % 2 == 1)
 
-    def rl_label(pct, left, reset, rich):
+    def rl_label(pct, left, reset, rich, outer):
         # Escalation ladder: calm → cycle/pinned; ≥ cd_pct → "81% · 3d";
         # red zone → countdown only (the bar already screams the %).
         pct_lbl = "{}%".format(clamp(pct, 0, 999))
@@ -492,12 +527,19 @@ def render(data, cols, now):
             return fmt_countdown(left)
         if rich and (pct >= cd_pct or rl_mode == "both"):
             return pct_lbl + " · " + fmt_countdown(left)
-        return fmt_countdown(left) if time_phase else pct_lbl
+        lbl = fmt_countdown(left) if time_phase else pct_lbl
+        if rl_mode == "cycle":
+            # Pad to the wider of the two variants so the row doesn't
+            # reflow when the cycle flips; pad on the outer side so the
+            # label stays snug against its gauge.
+            w = max(vwidth(pct_lbl), vwidth(fmt_countdown(left)))
+            lbl = lbl.rjust(w) if outer == "l" else lbl.ljust(w)
+        return lbl
 
     def rl_seg(rich):
         return rate_mirror(rl5_pct, rl7_pct, rl_len,
-                           rl_label(rl5_pct, rl5_left, rl5_reset, rich),
-                           rl_label(rl7_pct, rl7_left, rl7_reset, rich))
+                           rl_label(rl5_pct, rl5_left, rl5_reset, rich, "l"),
+                           rl_label(rl7_pct, rl7_left, rl7_reset, rich, "r"))
 
     def lines_seg():
         return "{}+{}{}{}/{}{}-{}{}".format(
@@ -574,11 +616,11 @@ DEMO_DATA = {
     "thinking": {"enabled": True},
     "vim": {"mode": "INSERT"},
     "agent": {"name": "reviewer"},
-    "context_window": {"used_percentage": 42, "total_input_tokens": 84213,
+    "context_window": {"used_percentage": 72, "total_input_tokens": 144213,
                        "context_window_size": 200000,
-                       "current_usage": {"input_tokens": 1900,
-                                         "cache_read_input_tokens": 79800,
-                                         "cache_creation_input_tokens": 2513,
+                       "current_usage": {"input_tokens": 2900,
+                                         "cache_read_input_tokens": 137300,
+                                         "cache_creation_input_tokens": 4013,
                                          "output_tokens": 1150}},
     "cost": {"total_cost_usd": 3.21, "total_duration_ms": 5432100,
              "total_lines_added": 128, "total_lines_removed": 37},
@@ -607,7 +649,13 @@ def main(argv):
             data = {}
         now = int(time.time())
 
-    cols = shutil.get_terminal_size((100, 24)).columns
+    cols = num(os.environ.get("RETRO_HUD_WIDTH")) or \
+        shutil.get_terminal_size((100, 24)).columns
+    # Claude Code's renderer truncates over-wide lines with an ellipsis
+    # at an undocumented threshold (see anthropics/claude-code#36417);
+    # community guidance is to stay well under COLUMNS-3. Tune with
+    # RETRO_HUD_MARGIN if your terminal still clips or leaves a gap.
+    cols = max(cols - num(os.environ.get("RETRO_HUD_MARGIN"), 3), 20)
     try:
         rows = render(data, cols, now)
     except Exception:  # never break the statusline — degrade gracefully

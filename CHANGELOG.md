@@ -4,6 +4,30 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.4.0] — 2026-07-08
+
+### Changed
+- The alien is now colored ASCII text art instead of emoji — `/o.o\`,
+  `>o.o<`, `\o.o/` by mood, tinted green/amber/red, blinking every tick.
+  Pure ASCII is width-exact in every terminal, which emoji are not.
+- Rows now render `RETRO_HUD_MARGIN` (default 3) columns short of
+  `$COLUMNS`: Claude Code's renderer truncates full-width lines with an
+  ellipsis at an undocumented threshold (anthropics/claude-code#36417).
+- Context token readout is contextual (`RETRO_HUD_CTX_TOKENS=auto`):
+  hidden while the gauge is calm, shown from the amber zone up.
+- Cycling rate-limit labels pad to a stable width so the row no longer
+  reflows when the cycle flips between `%` and countdown.
+- Session names are capped at 28 columns — Claude Code auto-generates
+  long descriptive names that would otherwise dominate row 1.
+- The xhigh effort glyph is now `◉` (was `⬤`, which many fonts draw
+  double-width and misalign).
+
+### Added
+- `RETRO_HUD_WIDTH` (hard width override) and `RETRO_HUD_EMOJI`
+  (`1` = count emoji as one cell, `0` = skip the folder emoji) for
+  terminals whose width accounting disagrees with Unicode — see the new
+  README troubleshooting section for WSL2/VS Code.
+
 ## [v2.3.0] — 2026-07-08
 
 ### Added
