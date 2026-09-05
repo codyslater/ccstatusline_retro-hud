@@ -4,6 +4,19 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.5.0] — 2026-09-05
+
+### Changed
+- Red-zone rate-limit labels (≥ 90%) no longer collapse to the reset
+  countdown alone: the % stays visible, either as the combined
+  `95% · 2h` label or, when the row is too narrow for it, by continuing
+  to cycle `95%` ↔ `2h` every 30s. Dropping the % hid the one number that
+  matters most when you are about to hit 100%. `RETRO_HUD_RL_MODE=both`
+  is unchanged; its red-zone opt-out is now simply the default.
+- Red-zone labels that cycle do so every 10s instead of 30s, so urgency
+  reads as tempo. Each gauge keeps its own clock: a 95% five-hour limit
+  flips fast while a calm seven-day limit keeps the 30s beat.
+
 ## [v2.4.3] — 2026-07-08
 
 ### Changed

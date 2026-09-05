@@ -65,8 +65,8 @@ To remove: `bash uninstall.sh`.
 | Usage | Label behavior |
 |-------|----------------|
 | < 75% | cycles `35%` ↔ `2h45m` every 30s — the gauge stretches to absorb the width difference, so nothing shifts on a flip |
-| 75–89% | pins to the combined `81% · 3d` |
-| ≥ 90% | countdown only, in $\color{#ff0000}{\textsf{red}}$ — the bar already screams the % |
+| 75–89% | pins to the combined `81% · 3d` (keeps cycling instead when the row is too narrow for it) |
+| ≥ 90% | same, in $\color{#ff0000}{\textsf{red}}$, and any cycling speeds up to every 10s — the % is never dropped, so you can see how close you are to 100% |
 
 ### The resident alien
 
