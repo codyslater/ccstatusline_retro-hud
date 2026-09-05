@@ -13,7 +13,8 @@ Env toggles:
     RETRO_HUD_FRAME=0            disable the right-edge frame fill
     RETRO_HUD_COUNTDOWN_PCT=75   rate-limit % at which reset countdowns appear
     RETRO_HUD_RL_MODE=cycle      rate-limit labels: cycle (alternate % and
-                                 time-to-reset every 30s), pct, time, or both
+                                 time-to-reset every 30s, every 10s in the
+                                 red zone), pct, time, or both
     RETRO_HUD_ALIEN=0            ground the alien that patrols the top rule
     RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
                                  always, or never
@@ -26,10 +27,11 @@ Env toggles:
 
 Rate-limit label escalation: below the countdown threshold the label
 cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
-"81% · 3d"; in the red zone (>=90%) it switches to time-to-reset only —
-the gauge itself already shows the saturation. "both" mode opts out.
+"81% · 3d" when the row has room, else keeps cycling. The % is never
+dropped — in the red zone (>=90%) the label turns red but stays put,
+so you can always see how close you are to 100%.
 """
-__version__ = "2.4.3"
+__version__ = "2.5.0"
 
 import json
 import os
@@ -66,6 +68,11 @@ RL_7D_EC = "\033[38;5;54m"
 ZONE_EC = ("\033[38;5;22m", "\033[38;5;58m", "\033[38;5;52m")
 WARN_PCT = 70   # amber zone starts
 RED_PCT = 90    # red zone starts
+
+# rate-limit label cycle periods (seconds); the red zone flips faster so
+# urgency reads as tempo — 10s is the floor the 5s refresh can show cleanly
+CYCLE_S = 30
+RED_CYCLE_S = 10
 
 SEP = " " + NEON_CYAN + "//" + R + " "
 
@@ -520,11 +527,14 @@ def render(data, cols, now):
     rl_mode = os.environ.get("RETRO_HUD_RL_MODE", "cycle")
     if rl_mode not in ("cycle", "pct", "time", "both"):
         rl_mode = "cycle"
-    time_phase = rl_mode == "time" or (rl_mode == "cycle" and (now // 30) % 2 == 1)
+    def time_phase(pct):
+        period = RED_CYCLE_S if pct >= RED_PCT else CYCLE_S
+        return rl_mode == "time" or (rl_mode == "cycle" and (now // period) % 2 == 1)
 
     def rl_label(pct, left, reset, rich):
-        # Escalation ladder: calm → cycle/pinned; ≥ cd_pct → "81% · 3d";
-        # red zone → countdown only (the bar already screams the %).
+        # Escalation ladder: calm → cycle/pinned; ≥ cd_pct → "81% · 3d".
+        # The % is never dropped — even in the red zone, how close you
+        # are to 100% is the number that matters.
         # Returns (label, flex): labels stay tight, and in cycle mode the
         # gauge stretches by `flex` cells — the width the other phase's
         # label would need — so the flip never moves anything.
@@ -532,13 +542,12 @@ def render(data, cols, now):
         if not reset:
             return pct_lbl, 0
         cd_lbl = fmt_countdown(left)
-        if pct >= RED_PCT and rl_mode != "both":
-            return cd_lbl, 0
         if rich and (pct >= cd_pct or rl_mode == "both"):
             return pct_lbl + " · " + cd_lbl, 0
+        tp = time_phase(pct)
         if rl_mode != "cycle":
-            return (cd_lbl if time_phase else pct_lbl), 0
-        shown, other = (cd_lbl, pct_lbl) if time_phase else (pct_lbl, cd_lbl)
+            return (cd_lbl if tp else pct_lbl), 0
+        shown, other = (cd_lbl, pct_lbl) if tp else (pct_lbl, cd_lbl)
         return shown, max(vwidth(other) - vwidth(shown), 0)
 
     def rl_seg(rich):
