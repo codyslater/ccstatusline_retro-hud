@@ -109,8 +109,8 @@ class TestContent(unittest.TestCase):
         # NOW // 30 is even → percentage phase of the cycle
         plain = sl.strip_ansi(sl.render(copy.deepcopy(FULL), 220, NOW)[1])
         self.assertIn("63%", plain)
-        self.assertNotIn("63% ·", plain)  # 63 < 75 → no combined label
-        self.assertIn("81% ·", plain)     # ≥75 → both, in every phase
+        self.assertNotIn("63% ·", plain)  # 63 < 70 → no combined label
+        self.assertIn("81% ·", plain)     # ≥70 → both, in every phase
 
     def test_cycle_time_phase(self):
         # NOW+30 // 30 is odd → time phase: 5h label becomes a countdown
@@ -119,41 +119,77 @@ class TestContent(unittest.TestCase):
         self.assertNotIn("63%", plain)
         self.assertIn("81% ·", plain)     # urgent side still shows both
 
-    def test_red_zone_keeps_pct_beside_countdown(self):
-        # ≥ 90% never hides the %: with room, the combined label pins in
-        # both phases, exactly like the 75–89% rung.
+    def test_warning_zone_pins_both_labels(self):
+        # 70% is where the gauge turns amber — the label pins there too,
+        # in every cycle phase, instead of rotating until 75%.
+        warm = copy.deepcopy(FULL)
+        warm["rate_limits"]["seven_day"]["used_percentage"] = 70
+        for t in (NOW, NOW + 30):
+            plain = sl.strip_ansi(sl.render(copy.deepcopy(warm), 220, t)[1])
+            self.assertIn("70% · ", plain)
+
+    def test_just_below_warning_still_cycles(self):
+        # 69% is the last rung that rotates — the pin is tied to the amber
+        # zone, not to a rounder number.
+        cool = copy.deepcopy(FULL)
+        cool["rate_limits"]["seven_day"]["used_percentage"] = 69
+        del cool["context_window"]["current_usage"]
+        pct_row = sl.strip_ansi(sl.render(copy.deepcopy(cool), 220, NOW)[1])
+        time_row = sl.strip_ansi(sl.render(copy.deepcopy(cool), 220, NOW + 30)[1])
+        self.assertIn("69%", pct_row)
+        self.assertNotIn("69% ·", pct_row)
+        self.assertNotIn("69%", time_row)
+
+    def test_five_hour_label_mirrors_pct_toward_bar(self):
+        # The mirror seats each % against the center divider: the 5h label
+        # reads "2h · 95%" so its % touches its own bar, matching the way
+        # the 7d side's "81% · 3d" touches its own.
         hot = copy.deepcopy(FULL)
         hot["rate_limits"]["five_hour"]["used_percentage"] = 95
         del hot["context_window"]["current_usage"]  # no "cache 95%" collision
+        plain = sl.strip_ansi(sl.render(hot, 220, NOW)[1])
+        self.assertIn("2h · 95% ", plain)
+        self.assertNotIn("95% · 2h", plain)
+        self.assertIn("81% · 3d", plain)
+
+    def test_red_zone_keeps_pct_beside_countdown(self):
+        # ≥ 90% never hides the %: the combined label pins in both phases,
+        # exactly like the 70–89% rung.
+        hot = copy.deepcopy(FULL)
+        hot["rate_limits"]["five_hour"]["used_percentage"] = 95
+        del hot["context_window"]["current_usage"]
         pct_row = sl.strip_ansi(sl.render(copy.deepcopy(hot), 220, NOW)[1])
         time_row = sl.strip_ansi(sl.render(copy.deepcopy(hot), 220, NOW + 30)[1])
-        self.assertIn("95% · 2h", pct_row)
-        self.assertIn("95% · 1h59m", time_row)
+        self.assertIn("2h · 95%", pct_row)
+        self.assertIn("1h59m · 95%", time_row)
 
-    def test_red_zone_cycles_when_narrow(self):
-        # When the row has shed the combined label, the red zone keeps
-        # cycling % ↔ countdown instead of dropping to countdown only.
+    def test_warning_labels_survive_a_narrow_row(self):
+        # The combined label is the last thing row 2 gives up: at 80
+        # columns the agent and the duration go first, and both numbers
+        # stay pinned in every phase.
         hot = copy.deepcopy(FULL)
         hot["rate_limits"]["five_hour"]["used_percentage"] = 95
         del hot["context_window"]["current_usage"]
-        pct_row = sl.strip_ansi(sl.render(copy.deepcopy(hot), 80, NOW)[1])
-        time_row = sl.strip_ansi(sl.render(copy.deepcopy(hot), 80, NOW + 30)[1])
-        self.assertIn("// 95% ", pct_row)
-        self.assertNotIn("1h59m", pct_row)
-        self.assertIn("// 1h59m ", time_row)
-        self.assertNotIn("95%", time_row)
+        for t in (NOW, NOW + 10, NOW + 30):
+            plain = sl.strip_ansi(sl.render(copy.deepcopy(hot), 80, t)[1])
+            self.assertRegex(plain, r"\dh(\d+m)? · 95%")
 
-    def test_red_zone_cycles_faster(self):
-        # Red-zone labels flip every 10s instead of 30s: at NOW+10 the 95%
-        # side is already in its time phase (NOW+10 // 10 is odd) while the
-        # 81% side still sits in its % phase (NOW+10 // 30 is even).
-        hot = copy.deepcopy(FULL)
-        hot["rate_limits"]["five_hour"]["used_percentage"] = 95
-        del hot["context_window"]["current_usage"]
-        row = sl.strip_ansi(sl.render(hot, 80, NOW + 10)[1])
-        self.assertIn("// 1h59m ", row)
-        self.assertNotIn("95%", row)
-        self.assertIn(" 81% //", row)
+    def test_red_zone_cycles_faster_when_pinning_is_off(self):
+        # RED_CYCLE_S still governs any row that does rotate in the red
+        # zone — raise the threshold past 95 and the 5h side flips on the
+        # 10s clock while the 81% side is still on its 30s one.
+        os.environ["RETRO_HUD_COUNTDOWN_PCT"] = "99"
+        try:
+            hot = copy.deepcopy(FULL)
+            hot["rate_limits"]["five_hour"]["used_percentage"] = 95
+            del hot["context_window"]["current_usage"]
+            row = sl.strip_ansi(sl.render(hot, 220, NOW + 10)[1])
+            self.assertIn("1h59m", row)
+            self.assertNotIn("95%", row)
+            self.assertIn(" 81% ", row)
+            self.assertNotIn("81% ·", row)
+        finally:
+            del os.environ["RETRO_HUD_COUNTDOWN_PCT"]
 
     def test_cycle_labels_tight_and_gauges_flex(self):
         # Cycling labels carry no padding blanks — instead each gauge

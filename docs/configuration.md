@@ -8,8 +8,8 @@ Set these in the `env` block of `~/.claude/settings.json`:
 |---------|---------|--------|
 | `RETRO_HUD_FRAME` | `1` | `0` disables the right-edge frame fill |
 | `RETRO_HUD_ALIEN` | `1` | `0` grounds the alien |
-| `RETRO_HUD_RL_MODE` | `cycle` | rate-limit labels: `cycle` (alternate % ↔ time-to-reset every 30s, every 10s in the red zone), `pct`, `time`, or `both` |
-| `RETRO_HUD_COUNTDOWN_PCT` | `75` | usage % where the combined `81% · 3d` label kicks in |
+| `RETRO_HUD_RL_MODE` | `cycle` | rate-limit labels *below* the pin threshold: `cycle` (alternate % ↔ time-to-reset every 30s, every 10s in the red zone), `pct`, `time`, or `both` |
+| `RETRO_HUD_COUNTDOWN_PCT` | `70` | usage % where the label stops rotating and pins the combined `81% · 3d`; defaults to the amber zone |
 | `RETRO_HUD_CTX_TOKENS` | `auto` | context token readout: `auto` (amber zone up), `always`, `never` |
 | `RETRO_HUD_MARGIN` | `3` | columns kept free at the right edge |
 | `RETRO_HUD_WIDTH` | — | hard width override when `$COLUMNS` is wrong |

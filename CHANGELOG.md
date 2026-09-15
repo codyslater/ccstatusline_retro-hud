@@ -4,6 +4,36 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.6.0] — 2026-09-15
+
+### Changed
+- A rate-limit gauge that reaches the amber zone now **stops rotating for
+  good** and pins both numbers, instead of alternating `77%` ↔ `20h30m`.
+  Rotation is fine while a limit is calm, but once it warns you want to
+  read the pressure and the reset in one glance, without waiting out a
+  flip.
+- The pin threshold (`RETRO_HUD_COUNTDOWN_PCT`) now defaults to `70`,
+  down from `75`, so it lines up with the amber zone. There is no longer
+  a 70–74% window where the gauge is coloured as a warning but the label
+  is still rotating.
+- The five-hour label is mirrored to `20h30m · 77%`, so on both halves of
+  the mirrored gauge the % is the token touching its own bar:
+  `20h30m · 77% ▎███|███▊ 77% · 20h30m`.
+- The pinned label is now the **last** thing row 2 gives up as the
+  terminal narrows — it moved from step 2 to the end of the degradation
+  ladder, behind the cache readout, token counts, diff stat, agent name,
+  and session duration. Previously an ~100-column terminal silently
+  reverted to rotating even at 95%, so a resize could change the mode.
+  Below the amber zone this reordering has no effect.
+
+### Notes
+- `RED_CYCLE_S` (the 10s red-zone flip from v2.5.0) is retained but is now
+  reachable only when rotation survives in the red zone — an extremely
+  cramped row, or a raised `RETRO_HUD_COUNTDOWN_PCT`.
+- Each gauge still escalates independently: a calm limit keeps cycling
+  beside a warning one, and the existing `flex` padding keeps the centre
+  divider fixed across those flips.
+
 ## [v2.5.0] — 2026-09-05
 
 ### Changed

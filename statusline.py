@@ -11,10 +11,13 @@ Flags:
 
 Env toggles:
     RETRO_HUD_FRAME=0            disable the right-edge frame fill
-    RETRO_HUD_COUNTDOWN_PCT=75   rate-limit % at which reset countdowns appear
-    RETRO_HUD_RL_MODE=cycle      rate-limit labels: cycle (alternate % and
-                                 time-to-reset every 30s, every 10s in the
-                                 red zone), pct, time, or both
+    RETRO_HUD_COUNTDOWN_PCT=70   rate-limit % at which the label pins both the
+                                 % and the reset countdown (default: the amber
+                                 zone, so pinning starts when the gauge warns)
+    RETRO_HUD_RL_MODE=cycle      rate-limit labels below the pin threshold:
+                                 cycle (alternate % and time-to-reset every
+                                 30s, every 10s in the red zone), pct, time,
+                                 or both
     RETRO_HUD_ALIEN=0            ground the alien that patrols the top rule
     RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
                                  always, or never
@@ -25,13 +28,15 @@ Env toggles:
                                  as one cell (some WSL/VS Code terminals);
                                  0: skip the folder emoji entirely
 
-Rate-limit label escalation: below the countdown threshold the label
-cycles (or is pinned by RETRO_HUD_RL_MODE); from the threshold it shows
-"81% · 3d" when the row has room, else keeps cycling. The % is never
-dropped — in the red zone (>=90%) the label turns red but stays put,
-so you can always see how close you are to 100%.
+Rate-limit label escalation: while a gauge is calm its label cycles (or
+is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
+stops rotating for good and pins both numbers — "20h30m · 77%" on the
+five-hour side, "77% · 20h30m" on the seven-day side, mirrored so that
+the % is always the token touching its own bar. Each gauge escalates on
+its own, and the pinned label is the last thing row 2 gives up when the
+terminal narrows, so neither number flickers away under you.
 """
-__version__ = "2.5.0"
+__version__ = "2.6.0"
 
 import json
 import os
@@ -378,7 +383,7 @@ def render(data, cols, now):
     """Return [row1, row2] sized to cols."""
     global _EMOJI_W
     frame_on = os.environ.get("RETRO_HUD_FRAME", "1") != "0"
-    cd_pct = num(os.environ.get("RETRO_HUD_COUNTDOWN_PCT"), 75)
+    cd_pct = num(os.environ.get("RETRO_HUD_COUNTDOWN_PCT"), WARN_PCT)
     emoji_mode = os.environ.get("RETRO_HUD_EMOJI", "2")
     _EMOJI_W = 1 if emoji_mode == "1" else 2
     ctx_tok_mode = os.environ.get("RETRO_HUD_CTX_TOKENS", "auto")
@@ -531,10 +536,13 @@ def render(data, cols, now):
         period = RED_CYCLE_S if pct >= RED_PCT else CYCLE_S
         return rl_mode == "time" or (rl_mode == "cycle" and (now // period) % 2 == 1)
 
-    def rl_label(pct, left, reset, rich):
-        # Escalation ladder: calm → cycle/pinned; ≥ cd_pct → "81% · 3d".
-        # The % is never dropped — even in the red zone, how close you
-        # are to 100% is the number that matters.
+    def rl_label(pct, left, reset, rich, mirror=False):
+        # Escalation ladder: calm → cycle; ≥ cd_pct (the amber zone) →
+        # the pinned "81% · 3d". Once a gauge is in warning it stops
+        # rotating for good — the % and the countdown are the last two
+        # things row 2 gives up, so neither flickers away under you.
+        # `mirror` flips the 5h side to "3d · 81%" so that on both halves
+        # of the gauge the % is the token touching the bar.
         # Returns (label, flex): labels stay tight, and in cycle mode the
         # gauge stretches by `flex` cells — the width the other phase's
         # label would need — so the flip never moves anything.
@@ -543,7 +551,7 @@ def render(data, cols, now):
             return pct_lbl, 0
         cd_lbl = fmt_countdown(left)
         if rich and (pct >= cd_pct or rl_mode == "both"):
-            return pct_lbl + " · " + cd_lbl, 0
+            return " · ".join((cd_lbl, pct_lbl) if mirror else (pct_lbl, cd_lbl)), 0
         tp = time_phase(pct)
         if rl_mode != "cycle":
             return (cd_lbl if tp else pct_lbl), 0
@@ -551,7 +559,7 @@ def render(data, cols, now):
         return shown, max(vwidth(other) - vwidth(shown), 0)
 
     def rl_seg(rich):
-        l5, flex5 = rl_label(rl5_pct, rl5_left, rl5_reset, rich)
+        l5, flex5 = rl_label(rl5_pct, rl5_left, rl5_reset, rich, mirror=True)
         l7, flex7 = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
         return rate_mirror(rl5_pct, rl7_pct, rl_len + flex5, rl_len + flex7,
                            l5, l7)
@@ -599,15 +607,15 @@ def render(data, cols, now):
         elif step == 1:
             tok_mode = 1
         elif step == 2:
-            rl_rich = False
-        elif step == 3:
             show_lines = False
-        elif step == 4:
+        elif step == 3:
             tok_mode = 0
-        elif step == 5:
+        elif step == 4:
             show_agent = False
-        else:
+        elif step == 5:
             show_dur = False
+        else:
+            rl_rich = False
 
     alien_pct = None
     if os.environ.get("RETRO_HUD_ALIEN", "1") != "0":
