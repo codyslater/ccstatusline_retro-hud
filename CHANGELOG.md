@@ -7,6 +7,9 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 ## [v2.9.0] — 2026-10-22
 
 ### Changed
+- The alien no longer narrates by default: `RETRO_HUD_BUBBLES=alerts` keeps
+  only `need you` / `compact?` / `limit soon` and events-channel messages;
+  `all` restores `ready`, `hm.`, `z`/`zZ` and idle quips; `off` silences it.
 - Duration and cost share one row-2 field that alternates every 30s
   (`T:1h29m` ↔ `$40.86`), padded to the wider label so the flip moves
   nothing. `RETRO_HUD_COST_MODE=both` restores the two segments. The

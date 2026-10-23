@@ -29,6 +29,9 @@ os.environ.pop("RETRO_HUD_ACTIONS", None)
 # The golden fixtures below predate the single duration↔cost field; they are
 # recorded in `both` mode. TestCostCycle sets `cycle` explicitly.
 os.environ["RETRO_HUD_COST_MODE"] = "both"
+# The presence tests below were written for the full narration; the default
+# is now `alerts`. TestBubbleModes covers the default and `off`.
+os.environ["RETRO_HUD_BUBBLES"] = "all"
 
 NOW = 1_800_000_000
 
@@ -2129,6 +2132,64 @@ class TestBubbles(PresenceCase):
         self.assertEqual(left, sorted(["keep.txt", "fresh.state.json",
                                        self.SID + ".state.json"]))
         self.assertEqual(self.state_file()["last_prune"], NOW)
+
+
+class TestBubbleModes(PresenceCase):
+    """RETRO_HUD_BUBBLES: alerts (default) never narrates; off says nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self._mode = os.environ.pop("RETRO_HUD_BUBBLES", None)
+
+    def tearDown(self):
+        os.environ.pop("RETRO_HUD_BUBBLES", None)
+        if self._mode is not None:
+            os.environ["RETRO_HUD_BUBBLES"] = self._mode
+        super().tearDown()
+
+    @staticmethod
+    def snap(state, ctx=10, limit=10):
+        return {"state": state, "ctx_pct": ctx, "limit_pct": limit, "cost": 1.0}
+
+    def test_default_is_alerts_no_narration(self):
+        prev = self.snap("working")
+        self.assertEqual(sl.next_bubble(prev, self.snap("yours"), NOW, name="Nova")[0], "")
+        self.assertEqual(sl.next_bubble(prev, self.snap("error"), NOW)[0], "")
+        self.assertEqual(sl.next_bubble(self.snap("idle"), self.snap("idle"), NOW)[0], "")
+        self.assertEqual(sl.next_bubble(self.snap("asleep"), self.snap("asleep"), NOW)[0], "")
+        prev = dict(self.snap("idle"), last_quip=0)
+        self.assertEqual(sl.next_bubble(prev, self.snap("idle"), NOW + 10 * sl.QUIP_EVERY_S)[0], "")
+
+    def test_alerts_still_speak(self):
+        prev = self.snap("working")
+        self.assertEqual(sl.next_bubble(prev, self.snap("needs"), NOW, name="Nova")[0], "Nova: need you")
+        self.assertEqual(sl.next_bubble(prev, self.snap("working", ctx=95), NOW)[0], "compact?")
+        self.assertEqual(sl.next_bubble(prev, self.snap("working", limit=75), NOW)[0], "limit soon")
+        self.assertEqual(sl.next_bubble(prev, self.snap("working"), NOW, event="deploy done")[0], "deploy done")
+
+    def test_all_restores_narration(self):
+        prev = self.snap("working")
+        self.assertEqual(sl.next_bubble(prev, self.snap("yours"), NOW, mode="all")[0], "ready")
+        self.assertEqual(sl.next_bubble(prev, self.snap("error"), NOW, mode="all")[0], "hm.")
+        self.assertEqual(sl.next_bubble(self.snap("asleep"), self.snap("asleep"), NOW, mode="all")[0], "zZ")
+
+    def test_off_says_nothing_even_events(self):
+        prev = self.snap("working")
+        self.assertEqual(sl.next_bubble(prev, self.snap("needs"), NOW, mode="off")[0], "")
+        self.assertEqual(sl.next_bubble(prev, self.snap("working"), NOW, event="hi", mode="off")[0], "")
+
+    def test_default_through_the_bar(self):
+        # End to end with the environment default: a finished turn draws no "ready".
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW)
+        self.tx(asst(NOW - 2, "tool_use"), asst(NOW + 4))
+        for t in (NOW + 5, NOW + 20):
+            self.assertNotIn("ready", self.row1(t), t)
+        os.environ["RETRO_HUD_BUBBLES"] = "all"
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW + 100)
+        self.tx(asst(NOW - 2, "tool_use"), asst(NOW + 104))
+        self.assertIn("ready", self.row1(NOW + 105))
 
 
 class TestHooksMerge(PresenceCase):

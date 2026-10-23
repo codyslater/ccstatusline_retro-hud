@@ -41,7 +41,12 @@ Env toggles:
     RETRO_HUD_PRESENCE=0         gauge-only alien: ignore what the agent does
     RETRO_HUD_SPRITE=alien       presence sprite set: alien, cat, robot, ghost
     RETRO_HUD_AGENT_NAME=<name>  prefix state bubbles ("Nova: ready")
-    RETRO_HUD_QUIPS=0            no idle quips
+    RETRO_HUD_BUBBLES=alerts     what the alien may say: alerts (default) =
+                                 only "need you" / "compact?" / "limit soon"
+                                 plus events-channel messages; all = also the
+                                 narration ("ready", "hm.", z/zZ, idle quips);
+                                 off = nothing, events included
+    RETRO_HUD_QUIPS=0            no idle quips (only matters with BUBBLES=all)
     RETRO_HUD_IDLE_MIN=10        minutes of "your turn" before idle
     RETRO_HUD_SLEEP_MIN=60       minutes of "your turn" before asleep
     RETRO_HUD_CACHE_DIR=<dir>    presence files (default ~/.cache/retro-hud)
@@ -724,19 +729,26 @@ def newest_event(events, now):
     return "", None
 
 
-def next_bubble(prev, snap, now, event="", name="", quips=True):
+def next_bubble(prev, snap, now, event="", name="", quips=True, mode="alerts"):
     """(bubble text, state-file updates) for this refresh.
 
     Priority: the events channel → a state-change bubble (once per
     transition, STATE_BUBBLE_S) → a rare idle quip → an ambient z / zZ
     while dozing. Muted (mute_until in the future) → nothing at all.
+
+    `mode` (RETRO_HUD_BUBBLES): "alerts" (default) keeps only what asks
+    something of you — "need you", "compact?", "limit soon" — and events;
+    "all" adds the narration ("ready", "hm.", z/zZ, quips); "off" says
+    nothing at all. A bar that narrates was the first thing its owner
+    turned off.
     """
     upd = {}
     state = snap["state"]
     pstate = prev.get("state")
+    narrate = mode == "all"
     said = None
     if pstate is not None:  # the first sighting is not a transition
-        if state != pstate and state == "error":
+        if state != pstate and state == "error" and narrate:
             said = "hm."
         elif state != pstate and state == "needs":
             said = "need you"
@@ -744,7 +756,7 @@ def next_bubble(prev, snap, now, event="", name="", quips=True):
             said = "compact?"
         elif (_num_or_none(prev.get("limit_pct")) or 0) < WARN_PCT <= snap["limit_pct"]:
             said = "limit soon"
-        elif state != pstate and state == "yours":
+        elif state != pstate and state == "yours" and narrate:
             said = "ready"
     bubble = prev.get("bubble") if isinstance(prev.get("bubble"), dict) else None
     if said:
@@ -753,16 +765,16 @@ def next_bubble(prev, snap, now, event="", name="", quips=True):
     if bubble and not (_num_or_none(bubble.get("until")) or 0) > now:
         bubble = None
     last_quip = _num_or_none(prev.get("last_quip")) or 0
-    if bubble is None and not event and quips and state == "idle" \
+    if bubble is None and not event and quips and narrate and state == "idle" \
             and now - last_quip >= QUIP_EVERY_S:
         bubble = {"text": QUIPS[int(now // QUIP_EVERY_S) % len(QUIPS)],
                   "until": now + STATE_BUBBLE_S}
         upd["last_quip"] = now
     upd["bubble"] = bubble
-    if (_num_or_none(prev.get("mute_until")) or 0) > now:
+    if mode == "off" or (_num_or_none(prev.get("mute_until")) or 0) > now:
         return "", upd
     text = event or (bubble or {}).get("text") or \
-        {"idle": "z", "asleep": "zZ"}.get(state, "")
+        ({"idle": "z", "asleep": "zZ"}.get(state, "") if narrate else "")
     return trunc(_clean(text), BUBBLE_MAX), upd
 
 
@@ -834,7 +846,10 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
             event, wave_since = "", ets
         name = _clean(os.environ.get("RETRO_HUD_AGENT_NAME", ""))
         quips = os.environ.get("RETRO_HUD_QUIPS", "1") != "0"
-        text, upd = next_bubble(prev, snap, now, event, name, quips)
+        mode = os.environ.get("RETRO_HUD_BUBBLES", "alerts")
+        if mode not in ("alerts", "all", "off"):
+            mode = "alerts"
+        text, upd = next_bubble(prev, snap, now, event, name, quips, mode)
         rec = dict(prev)
         rec.update(snap)
         rec.update(upd)

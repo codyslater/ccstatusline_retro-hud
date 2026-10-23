@@ -11,6 +11,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_PRESENCE` | `1` | `0` restores the gauge-only alien: it reacts to the gauges but not to what the agent is doing |
 | `RETRO_HUD_SPRITE` | `alien` | presence sprite set: `alien`, `cat`, `robot`, `ghost` |
 | `RETRO_HUD_AGENT_NAME` | — | name the agent that lives in this terminal; prefixes state bubbles (`Nova: ready`) |
+| `RETRO_HUD_BUBBLES` | `alerts` | what the alien may say: `alerts` = only `need you` / `compact?` / `limit soon` plus events-channel messages; `all` = also `ready`, `hm.`, `z`/`zZ` and idle quips; `off` = nothing |
 | `RETRO_HUD_QUIPS` | `1` | `0` turns off the rare idle quips |
 | `RETRO_HUD_IDLE_MIN` | `10` | minutes of "your turn" before the alien goes idle |
 | `RETRO_HUD_SLEEP_MIN` | `60` | minutes of "your turn" before it falls asleep |

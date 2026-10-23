@@ -81,8 +81,10 @@ cycling beside a warning one.
 A text-art alien lives on the top frame rule and acts as the visible
 presence of the agent running in that session: it hustles while the agent
 works, waves when the turn is yours, beckons when a permission prompt is
-waiting, and dozes off when nothing happens. Now and then it says
-something short on the rule. Most of the time it says nothing.
+waiting, and dozes off when nothing happens. By default it speaks only
+when something needs you (`need you`, `compact?`, `limit soon`) or when a
+local tool sends it a message; `RETRO_HUD_BUBBLES=all` adds the narration
+(`ready`, `hm.`, `zZ`, idle quips) and `RETRO_HUD_BUBBLES=off` silences it.
 
 **What it reacts to**, highest priority first:
 
