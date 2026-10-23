@@ -26,6 +26,9 @@ import statusline as sl
 # Click actions are opt-in; a developer's own shell may export the toggle
 # (and usually runs inside tmux), so every test starts from "off".
 os.environ.pop("RETRO_HUD_ACTIONS", None)
+# The golden fixtures below predate the single duration↔cost field; they are
+# recorded in `both` mode. TestCostCycle sets `cycle` explicitly.
+os.environ["RETRO_HUD_COST_MODE"] = "both"
 
 NOW = 1_800_000_000
 
@@ -330,6 +333,74 @@ class TestAlien(unittest.TestCase):
             self.assertEqual(sl.vislen(row), 200)  # emoji counted as 1 cell
         finally:
             del os.environ["RETRO_HUD_EMOJI"]
+
+
+class TestCostCycle(unittest.TestCase):
+    """RETRO_HUD_COST_MODE=cycle: duration and cost share one padded field."""
+
+    def setUp(self):
+        self._saved = os.environ.get("RETRO_HUD_COST_MODE")
+        os.environ["RETRO_HUD_COST_MODE"] = "cycle"
+
+    def tearDown(self):
+        os.environ.pop("RETRO_HUD_COST_MODE", None)
+        if self._saved is not None:
+            os.environ["RETRO_HUD_COST_MODE"] = self._saved
+
+    def row2(self, now, cols=220):
+        return sl.strip_ansi(sl.render(copy.deepcopy(FULL), cols, now)[1])
+
+    def test_alternates_every_cycle(self):
+        a = self.row2(NOW)
+        b = self.row2(NOW + sl.CYCLE_S)
+        self.assertNotEqual(a, b)
+        shown = {("T:1h30m" in a, "$3.21" in a), ("T:1h30m" in b, "$3.21" in b)}
+        self.assertEqual(shown, {(True, False), (False, True)})
+
+    def test_flip_moves_nothing(self):
+        # Without rate limits (whose countdown labels legitimately move with
+        # time) the only thing changing between phases is this field.
+        payload = copy.deepcopy(FULL)
+        payload.pop("rate_limits", None)
+        a = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW)[1])
+        b = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW + sl.CYCLE_S)[1])
+        self.assertNotEqual(a, b)
+        self.assertEqual(len(a), len(b))
+        # every separator sits in the same column on both phases
+        self.assertEqual([m.start() for m in re.finditer("//", a)],
+                         [m.start() for m in re.finditer("//", b)])
+        self.assertEqual(a.index("┘"), b.index("┘"))
+
+    def test_padded_to_wider_label(self):
+        a = self.row2(NOW)
+        b = self.row2(NOW + sl.CYCLE_S)
+        short, long_ = sorted((a, b), key=lambda r: ("$3.21" in r))
+        # "$3.21" (5) is padded to "T:1h30m" (7): two spaces follow it
+        self.assertIn("$3.21   //", long_ if "$3.21" in long_ else short)
+
+    def test_narrow_shows_cost_alone(self):
+        row = self.row2(NOW, cols=44)   # the ladder has dropped the duration here
+        self.assertIn("$3.21", row)
+        self.assertNotIn("T:", row)
+        self.assertNotIn("$3.21  ", row)
+
+    def test_both_mode_keeps_two_segments(self):
+        os.environ["RETRO_HUD_COST_MODE"] = "both"
+        row = self.row2(NOW)
+        self.assertIn("T:1h30m", row)
+        self.assertIn("$3.21", row)
+        self.assertLess(row.index("T:1h30m"), row.index("$3.21"))
+
+    def test_cost_link_covers_the_field(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        os.environ["TMUX_PANE"] = "%3"
+        try:
+            for now in (NOW, NOW + sl.CYCLE_S):
+                raw = sl.render(copy.deepcopy(FULL), 220, now)[1]
+                self.assertEqual(raw.count("retro-hud://cost"), 1)
+        finally:
+            os.environ.pop("RETRO_HUD_ACTIONS", None)
+            os.environ.pop("TMUX_PANE", None)
 
 
 class TestWidthKnobs(unittest.TestCase):

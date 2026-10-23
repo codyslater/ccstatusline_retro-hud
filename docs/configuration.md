@@ -15,6 +15,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_IDLE_MIN` | `10` | minutes of "your turn" before the alien goes idle |
 | `RETRO_HUD_SLEEP_MIN` | `60` | minutes of "your turn" before it falls asleep |
 | `RETRO_HUD_CACHE_DIR` | `~/.cache/retro-hud` | where the per-session state, events and hook files live (falls back to `/tmp/retro-hud-<uid>` without a usable home). `presence-hook.sh` honours it too |
+| `RETRO_HUD_COST_MODE` | `cycle` | `cycle`: duration and cost share one field, alternating every 30s and padded to the wider label so the flip moves nothing; `both`: two segments (`T:…` and `$…`) |
 | `RETRO_HUD_RL_MODE` | `cycle` | rate-limit labels *below* the pin threshold: `cycle` (alternate % ↔ time-to-reset every 30s, every 10s in the red zone), `pct`, `time`, or `both` |
 | `RETRO_HUD_COUNTDOWN_PCT` | `70` | usage % where the label stops rotating and pins the combined `81% · 3d`; defaults to the amber zone |
 | `RETRO_HUD_CTX_TOKENS` | `auto` | context token readout: `auto` (amber zone up), `always`, `never` |

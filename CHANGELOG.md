@@ -6,6 +6,12 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
 ## [v2.9.0] — 2026-10-22
 
+### Changed
+- Duration and cost share one row-2 field that alternates every 30s
+  (`T:1h29m` ↔ `$40.86`), padded to the wider label so the flip moves
+  nothing. `RETRO_HUD_COST_MODE=both` restores the two segments. The
+  narrow-terminal ladder still shows the cost alone.
+
 ### Added
 - **Agent presence.** The alien on the top rule now follows the agent
   running in the session, not just the gauges. It hustles while the agent

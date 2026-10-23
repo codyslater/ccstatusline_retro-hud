@@ -14,6 +14,10 @@ Env toggles:
     RETRO_HUD_COUNTDOWN_PCT=70   rate-limit % at which the label pins both the
                                  % and the reset countdown (default: the amber
                                  zone, so pinning starts when the gauge warns)
+    RETRO_HUD_COST_MODE=cycle    cycle: duration and cost share ONE field,
+                                 alternating every 30s, padded to the wider
+                                 label so the flip moves nothing; both: two
+                                 segments (T:… and $…) as before
     RETRO_HUD_RL_MODE=cycle      rate-limit labels below the pin threshold:
                                  cycle (alternate % and time-to-reset every
                                  30s, every 10s in the red zone), pct, time,
@@ -1183,6 +1187,23 @@ def render(data, cols, now):
                        if ch.isprintable()).strip()
     home_seg = NEON_GREEN + link(home_url, "⌂") + R if home_url else ""
 
+    cost_mode = os.environ.get("RETRO_HUD_COST_MODE", "cycle")
+    if cost_mode not in ("cycle", "both"):
+        cost_mode = "cycle"
+    cost_str = "${:.2f}".format(cost) if cost < 100 else "${:.0f}".format(cost)
+
+    def cost_seg(cycle):
+        """Cost alone, or (cycle mode) duration ↔ cost in ONE field: both labels
+        are padded to the wider one, so the flip never moves a neighbour. The
+        narrow-terminal ladder passes cycle=False and shows the cost alone."""
+        if not cycle:
+            return NEON_YEL + action("cost", cost_str) + R
+        dur_lbl = "T:" + dur_str
+        width = max(vwidth(dur_lbl), vwidth(cost_str))
+        if (now // CYCLE_S) % 2 == 1:
+            return NEON_PINK + action("cost", dur_lbl.ljust(width)) + R
+        return NEON_YEL + action("cost", cost_str.ljust(width)) + R
+
     show_lines = lines_add > 0 or lines_del > 0
     show_dur = True
     show_cache = cache_denom > 0 and cols >= 140
@@ -1197,10 +1218,9 @@ def render(data, cols, now):
             segs.append(lines_seg())
         if show_cache:
             segs.append(cache_seg())
-        if show_dur:
+        if show_dur and cost_mode == "both":
             segs.append(NEON_PINK + "T:" + dur_str + R)
-        segs.append(NEON_YEL + action("cost", "${:.2f}".format(cost) if cost < 100
-                                      else "${:.0f}".format(cost)) + R)
+        segs.append(cost_seg(show_dur and cost_mode == "cycle"))
         if show_agent:
             segs.append(agent_seg())
         segs.append(home_seg)
