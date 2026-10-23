@@ -619,7 +619,9 @@ show_card() {  # pane; after agent_target
         printf '\n\033[2mtip: %s\033[0m\n' "$tip"
         printf '\033[2m%s\033[0m\n' "any key closes · m: menu"
     } >"$file"
-    printf '#!/bin/bash\ncat %s\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' \
+    # head -c -1: no final newline, so the cursor stays on the last line and the popup, sized
+    # to the text, does not scroll its first line away
+    printf '#!/bin/bash\nhead -c -1 %s\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' \
         "'$file'" >"$runner"
     w=$(( $(vis_width <"$file") + 4 ))
     h=$(( $(wc -l <"$file") + 2 ))

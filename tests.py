@@ -691,7 +691,7 @@ elif cmd[:1] == ["display-popup"]:
     m = re.fullmatch(r"bash '([^']+)'", cmd[-1])        # keep the popup's files: the handler removes them after
     if m and os.path.exists(m.group(1)):
         shutil.copy(m.group(1), os.path.join(os.environ["HOME"], "popup.runner"))
-        card = re.search(r"^cat '([^']+)'$", open(m.group(1)).read(), re.M)
+        card = re.search(r"^head -c -1 '([^']+)'$", open(m.group(1)).read(), re.M)
         if card and os.path.exists(card.group(1)):
             shutil.copy(card.group(1), os.path.join(os.environ["HOME"], "popup.card"))
     if os.environ.get("FAKE_TMUX_POPUP_RC"):
