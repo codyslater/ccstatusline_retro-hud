@@ -2556,6 +2556,71 @@ class TestCreatureGrid(unittest.TestCase):
             self.assertEqual(legs(sl.creature_grid(seed, "bot")[3]), 2, seed)
 
 
+class TestTinyGrid(unittest.TestCase):
+    """The braille creature's body: the same generator at width 10."""
+
+    def check(self, g, label):
+        self.assertEqual(len(g), 4, label)
+        for row in g:
+            self.assertEqual(len(row), 10, label)
+            self.assertEqual(list(row), list(reversed(row)), label)
+        self.assertTrue(_connected(g), label)
+        eyes = sorted((r, c) for r in range(4) for c in range(10) if g[r][c] == "eye")
+        self.assertEqual(len(eyes), 2, label)
+        self.assertEqual((eyes[0][0], eyes[1][0]), (1, 1), label)
+        self.assertEqual(eyes[0][1] + eyes[1][1], 9, label)
+        self.assertGreaterEqual(sum(1 for v in g[3] if v), 2, label)
+
+    def test_every_family_and_seed_is_well_formed(self):
+        for fam in sl.FAMILIES:
+            for seed in TestCreatureGrid.SEEDS:
+                self.check(sl.creature_grid(seed, fam, width=10), (fam, seed))
+        self.check(sl.FALLBACK_TINY, "fallback")
+        self.assertEqual(sl.creature_grid(5, "bot", attempts=0, width=10), sl.FALLBACK_TINY)
+
+    def test_same_family_shape_as_the_big_one(self):
+        # the centre column is doubled; everything else is the 9-wide body
+        for fam in sl.FAMILIES:
+            for seed in range(30):
+                big, tiny = sl.creature_grid(seed, fam), sl.creature_grid(seed, fam, width=10)
+                for r in range(4):
+                    self.assertEqual(tiny[r][:5], big[r][:5], (fam, seed))
+
+
+class TestBraille(unittest.TestCase):
+    BITS = ((1, 8), (2, 16), (4, 32), (64, 128))
+
+    def test_each_dot_has_its_bit(self):
+        for r in range(4):
+            for c in range(2):
+                dots = [[None, None] for _ in range(4)]
+                dots[r][c] = "b"
+                self.assertEqual(sl.braille(dots), [chr(0x2800 + self.BITS[r][c])])
+
+    def test_full_empty_and_width(self):
+        full = [["b"] * 4 for _ in range(4)]
+        self.assertEqual(sl.braille(full), ["⣿", "⣿"])
+        self.assertEqual(sl.braille([[None] * 14 for _ in range(4)]), [None] * 7)
+        self.assertEqual(len(sl.braille([["b"] * 14 for _ in range(4)])), 7)
+
+    def test_eyes_are_holes(self):
+        dots = [["b", "b"], ["e", "b"], ["b", "b"], ["b", "b"]]
+        self.assertEqual(sl.braille(dots), [chr(0x2800 + 0xFF - 2)])
+
+    def test_half_cell_offset_moves_one_dot(self):
+        g = sl.creature_grid(0, "alien", width=10)
+        dots0 = [[None] + [v if v == "body" else None for v in row] + [None] * 3 for row in g]
+        dots1 = [[None] + row[:-1] for row in dots0]
+        a, b = sl.braille(dots0), sl.braille(dots1)
+        self.assertNotEqual(a, b)
+        # the left column of each cell in offset 1 is the right column of
+        # the cell before it in offset 0
+        for i in range(1, 7):
+            left = (ord(b[i] or "⠀") - 0x2800) & 0x47
+            right = (ord(a[i - 1] or "⠀") - 0x2800) & 0xB8
+            self.assertEqual(left, (right >> 3) & 0x07 | (right & 0x80) >> 1)
+
+
 class TestCreatureIdentity(unittest.TestCase):
     def test_seed_sources_normalise(self):
         cs = sl.creature_seed

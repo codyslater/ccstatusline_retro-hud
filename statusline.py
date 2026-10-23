@@ -1024,6 +1024,10 @@ FALLBACK_GRID = _grid_from(("..X...X..",
                             ".XEXXXEX.",
                             "XXXXXXXXX",
                             ".X..X..X."))
+FALLBACK_TINY = _grid_from(("..X....X..",
+                            ".XEXXXXEX.",
+                            "XXXXXXXXXX",
+                            ".X..XX..X."))
 
 # Per-family fill probabilities for pixel rows 0–2, half-body columns
 # 0–4 (column 4 is the centre); row 3 (legs) and the eyes are placed by
@@ -1075,31 +1079,34 @@ def _grow(rand, family):
     return h
 
 
-def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS):
-    """The creature's body: 4 pixel rows × 9 columns of None, "body" or
-    "eye" (a tuple of tuples). Mirrored left/right, 4-connected, two eyes
-    on row 1 with body between them, at least two cells of legs on row 3.
-    Deterministic per (seed, family); after `attempts` candidates that
-    break a rule it returns FALLBACK_GRID."""
+def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS, width=9):
+    """The creature's body: 4 pixel rows × `width` columns of None, "body"
+    or "eye" (a tuple of tuples): 9 for the half-block creature, 10 for
+    the braille one (the centre column doubled). Mirrored left/right,
+    4-connected, two eyes on row 1 with body between them, at least two
+    cells of legs on row 3. Deterministic per (seed, family, width); after
+    `attempts` candidates that break a rule it returns FALLBACK_GRID (or
+    FALLBACK_TINY at width 10)."""
     family = creature_family(family)
     rand = _mulberry32(seed ^ zlib.crc32(family.encode()))
+    last = width - 1
     for _ in range(attempts):
         h = _grow(rand, family)
-        g = [[h[r][min(c, 8 - c)] for c in range(9)] for r in range(4)]
+        g = [[h[r][min(c, last - c)] for c in range(width)] for r in range(4)]
         seen, todo = {(1, 4)}, [(1, 4)]  # keep what touches the spine
         while todo:
             r, c = todo.pop()
             for n in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
-                if 0 <= n[0] < 4 and 0 <= n[1] < 9 and g[n[0]][n[1]] and n not in seen:
+                if 0 <= n[0] < 4 and 0 <= n[1] < width and g[n[0]][n[1]] and n not in seen:
                     seen.add(n)
                     todo.append(n)
         for r in range(4):
-            for c in range(9):
+            for c in range(width):
                 if (r, c) not in seen:
                     g[r][c] = None
         if sum(1 for v in g[1] if v == "eye") == 2 and sum(1 for v in g[3] if v) >= 2:
             return tuple(tuple(row) for row in g)
-    return FALLBACK_GRID
+    return FALLBACK_GRID if width == 9 else FALLBACK_TINY
 
 
 BOX_W = 13                # the creature's footprint: 9 body cells + 2 each side
@@ -1257,6 +1264,25 @@ def pose(seed, mood, mood_since, now, cols, family="alien", color=None, icon="")
     return {"pos": pos, "right": right, "canvas": cv, "body": body, "eye": eye,
             "x": 231 if body == 198 else 198, "icon": icon or "",
             "icon_row": 1 if mood == "asleep" else 0, "ask": ask}
+
+
+_BRAILLE_BITS = ((1, 8), (2, 16), (4, 32), (64, 128))
+
+
+def braille(dots):
+    """4 dot rows (even width) → one braille character per 2×4 dots, or
+    None for a cell with no dot set. "e" (an eye) is a hole: braille has
+    one colour per cell, so eyes are dots left unset."""
+    cells = []
+    for ci in range(len(dots[0]) // 2):
+        v = 0
+        for r in range(4):
+            for dc in range(2):
+                tok = dots[r][2 * ci + dc]
+                if tok and tok != "e":
+                    v |= _BRAILLE_BITS[r][dc]
+        cells.append(chr(0x2800 + v) if v else None)
+    return cells
 
 
 def _sgr(fg=None, bg=None):
