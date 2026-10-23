@@ -997,14 +997,23 @@ def creature_seed(state=None, env="", sid=""):
     return 0
 
 
-def creature_color(seed, pin=""):
-    """256-colour index of the body: RETRO_HUD_CREATURE_COLOR (a name or
-    0–255) pins it, else one of CREATURE_PALETTE chosen by the seed."""
+def pinned_color(pin):
+    """A RETRO_HUD_CREATURE_COLOR value (a name or 0–255) as a 256-colour
+    index, or None when it names no colour."""
     pin = str(pin or "").strip().lower()
     if pin in CREATURE_COLORS:
         return CREATURE_COLORS[pin]
     if pin.isdigit() and int(pin) <= 255:
         return int(pin)
+    return None
+
+
+def creature_color(seed, pin=""):
+    """256-colour index of the body: RETRO_HUD_CREATURE_COLOR (a name or
+    0–255) pins it, else one of CREATURE_PALETTE chosen by the seed."""
+    pinned = pinned_color(pin)
+    if pinned is not None:
+        return pinned
     return CREATURE_PALETTE[int(_mulberry32(seed ^ 0x5EED)() * len(CREATURE_PALETTE))]
 
 
@@ -1355,11 +1364,11 @@ TINY_MIN_TRACK = TINY_W + 4
 # the top corners (the "/" and "\"), a compact body under them. Its arms
 # carry the old mood vocabulary: pulled in and down when agitated (">o.o<"),
 # straight up in the red zone ("\o.o/").
-TINY_ALIEN = ("X..XXX..X",
+TINY_ALIEN = ("X.XXXXX.X",
               ".XEEXEEX.",
               ".XEEXEEX.",
               "..XXXXX..")
-_ARMS = {"out": ((0, 0), (0, 8)), "up": ((0, 1), (0, 7)),
+_ARMS = {"out": ((0, 0), (0, 8)), "up": ((0, 0), (1, 0), (0, 8), (1, 8)),
          "down": ((2, 0), (3, 0), (2, 8), (3, 8))}
 TINY_ALIEN_COLOR = 46     # green, as the old guy: amber and red escalate it
 
@@ -1504,11 +1513,12 @@ def _sgr(fg=None, bg=None):
         ([] if bg is None else ["48;5;{}".format(bg)])))
 
 
-def render_box(p):
-    """(head line cells, rule cells) for a pose: two strings of visible
+def render_box(p, rule_top=False):
+    """(upper cells, lower cells) for a pose: two strings of visible
     width 13. One text cell holds two pixel rows (▀ top / ▄ bottom, fg
     and bg as their colours); every cell ends with an SGR reset. Empty
-    cells are spaces on the head line and rule ─ on row 1."""
+    cells are rule ─, except on the tall layout's head line (spaces)
+    unless `rule_top`."""
     cv = p["canvas"]
 
     def colour(tok):
@@ -1528,7 +1538,7 @@ def render_box(p):
             elif b:
                 cells.append(_sgr(colour(b)) + "▄" + R)
             else:
-                cells.append(" " + R if row == 0 else RULE + "─" + R)
+                cells.append(" " + R if row == 0 and not rule_top else RULE + "─" + R)
         lines.append(cells)
     mark = lambda ch: "\033[1m" + _sgr(ICON_256) + ch + R
     if p.get("ask") is not None:
@@ -1640,6 +1650,74 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None,
     return "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, corner, R)
 
 
+def _boxed(row, cols, corner, col, box, box_w, bubble="", right=True):
+    """`row` closed by the rule and `corner` as _frame does, with `box`
+    (visible width box_w) at absolute column `col` and, when it fits, a
+    bubble on the rule beside it, in the travel direction."""
+    lpad = col - vislen(row) - 1
+    rpad = cols - 1 - col - box_w
+    side, bubble = _place_bubble(lpad, lpad + rpad, bubble, right) if bubble else (0, "")
+    bw = 1 + vwidth(bubble) if side else 0
+    left = "─" * (lpad - bw if side == -1 else lpad)
+    rest = "─" * (rpad - bw if side == 1 else rpad)
+    if side == -1:
+        left += R + BUBBLE + bubble + R + RULE + "╶"
+    mid = R + box + RULE
+    if side == 1:
+        mid += "╴" + R + BUBBLE + bubble + R + RULE
+    return "{} {}{}{}{}{}{}".format(row, RULE, left + mid + rest, R, NEON_GREEN, corner, R)
+
+
+def _creature_mood(alien_pct, pres):
+    """(mood, mood_since, icon, bubble) for the creature this refresh."""
+    if pres is None:  # gauge-only: calm, agitated or red, steady poses
+        mood = "calm" if alien_pct < WARN_PCT else ("agitated" if alien_pct < RED_PCT else "red")
+        return mood, None, "", ""
+    icon = pres.get("icon") or ""
+    return (pres.get("mood"), _num_or_none(pres.get("mood_since")),
+            icon if _icon_ok(icon) else "", pres.get("bubble") or "")
+
+
+def _frame_tiny(row, cols, frame_on, alien_pct, now, pres, look, action=None):
+    """Row 1 with the tiny braille creature in a fixed 7-cell box on the
+    rule and its bubble beside it (as the 2.x alien's). No creature (alien
+    off, frame off, a rule shorter than TINY_MIN_TRACK): the plain rule."""
+    track = cols - vislen(row) - 2
+    if not frame_on or alien_pct is None or track < TINY_MIN_TRACK:
+        return _frame(row, cols, "┐", frame_on)
+    mood, mood_since, icon, bubble = _creature_mood(alien_pct, pres)
+    p = tiny_pose(look["seed"], mood, mood_since, now, track, look["family"],
+                  look["color"], icon, tick_s())
+    box = render_tiny(p)
+    if action:
+        box = action("agent", box)
+    col = vislen(row) + 1 + p["pos"]
+    return _boxed(row, cols, "┐", col, box, TINY_W, bubble, p["right"])
+
+
+def _frame_big(row1, row2, cols, frame_on, alien_pct, now, pres, look, action=None):
+    """(row 1, row 2) with the half-block creature straddling them: its
+    upper two pixel rows replace rule cells on row 1, its lower two the
+    cells below them on row 2. It walks the rule the two rows share (row
+    2's free rule starts after its own last segment) in a fixed 13-cell
+    box; the bubble and an event icon stay on row 1. With no shared rule
+    of CREATURE_MIN_TRACK cells both rows are the plain frame."""
+    plain = (_frame(row1, cols, "┐", frame_on), _frame(row2, cols, "┘", frame_on))
+    start = max(vislen(row1), vislen(row2)) + 1  # first rule column on both rows
+    track = cols - 1 - start
+    if not frame_on or alien_pct is None or track < CREATURE_MIN_TRACK:
+        return plain
+    mood, mood_since, icon, bubble = _creature_mood(alien_pct, pres)
+    p = pose(look["seed"], mood, mood_since, now, track, look["family"], look["color"],
+             icon, tick_s())
+    top, bottom = render_box(p, rule_top=True)
+    if action:
+        top, bottom = action("agent", top), action("agent", bottom)
+    col = start + p["pos"]
+    return (_boxed(row1, cols, "┐", col, top, BOX_W, bubble, p["right"]),
+            _boxed(row2, cols, "┘", col, bottom, BOX_W))
+
+
 def _frame_creature(row, cols, frame_on, alien_pct, now, pres, look, action=None):
     """(head line, row 1) with the pixel creature.
 
@@ -1704,8 +1782,9 @@ def creature_look(data, pres):
         if sprite not in SPRITES and sprite not in FAMILIES:
             sprite = os.environ.get("RETRO_HUD_SPRITE")
     seed = creature_seed(st_seed, os.environ.get("RETRO_HUD_CREATURE_SEED", ""), sid)
+    # color None: the size's own default (seeded, or the tiny alien's green)
     return {"seed": seed, "family": creature_family(sprite),
-            "color": creature_color(seed, os.environ.get("RETRO_HUD_CREATURE_COLOR", ""))}
+            "color": pinned_color(os.environ.get("RETRO_HUD_CREATURE_COLOR", ""))}
 
 
 SIZES = ("tiny", "big", "tall")
@@ -2021,8 +2100,19 @@ def render(data, cols, now):
         except Exception:  # decoration again: a blank head line, a plain rule
             head, top = R, _frame(row1, cols, "┐", frame_on)
         return [head, top, _frame(row2, cols, "┘", frame_on)]
-    if creature:  # tiny and big: built in the next steps
-        return [_frame(row1, cols, "┐", frame_on), _frame(row2, cols, "┘", frame_on)]
+    if size == "big":
+        try:
+            return list(_frame_big(row1, row2, cols, frame_on, alien_pct, now, pres,
+                                   creature_look(data, pres), action))
+        except Exception:  # decoration: the plain frame
+            return [_frame(row1, cols, "┐", frame_on), _frame(row2, cols, "┘", frame_on)]
+    if size == "tiny":
+        try:
+            top = _frame_tiny(row1, cols, frame_on, alien_pct, now, pres,
+                              creature_look(data, pres), action)
+        except Exception:  # decoration: the plain frame
+            top = _frame(row1, cols, "┐", frame_on)
+        return [top, _frame(row2, cols, "┘", frame_on)]
     return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres, action),
             _frame(row2, cols, "┘", frame_on)]
 

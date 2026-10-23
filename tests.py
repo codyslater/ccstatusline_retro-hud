@@ -3319,6 +3319,265 @@ class TestCreatureSize(PresenceCase):
             sl.render = saved
 
 
+_TINY_CELL_RE = re.compile(r"(?:(?:\x1b\[[0-9;]*m)*[^\x1b]\x1b\[0m)*")
+_QUIET = {"blink": False, "hop": False, "breathe": False}
+
+
+def _dots(cv):
+    return sum(1 for row in cv for v in row if v and v != "e")
+
+
+class TestTinyPose(unittest.TestCase):
+    """The braille creature: a fixed 7-cell box, half-cell steps, and every
+    behaviour reachable from (seed, tick)."""
+
+    def tp(self, mood, t=NOW, seed=4, fam="alien", since=None, **kw):
+        return sl.tiny_pose(seed, mood, since, t, 60, fam, **kw)
+
+    def quiet(self):
+        saved = sl.alive_flags
+        sl.alive_flags = lambda s, t: dict(_QUIET)
+        self.addCleanup(setattr, sl, "alive_flags", saved)
+
+    def test_box_is_7_cells_for_every_pose(self):
+        for fam in sl.FAMILIES:
+            for seed in range(0, 30, 7):
+                for mood in MOODS_ALL:
+                    for el in (None, 0, 3, 7, 12, 40, 4000):
+                        for t in range(NOW, NOW + 8):
+                            for icon in ("", "!", "\U0001F6A9"):
+                                since = None if el is None else t - el
+                                p = sl.tiny_pose(seed, mood, since, t, 60, fam, icon=icon)
+                                box = sl.render_tiny(p)
+                                label = (fam, seed, mood, el, t, icon)
+                                self.assertEqual(sl.vislen(box), 7, label)
+                                self.assertTrue(_TINY_CELL_RE.fullmatch(box), label)
+                                self.assertEqual([len(r) for r in p["dots"]], [14] * 4, label)
+                                self.assertIn(p["sub"], (0, 1), label)
+                                self.assertTrue(0 <= p["pos"] <= 60 - 7, label)
+
+    def test_nothing_falls_off_the_box(self):
+        # the widest moves (breath, shake, jitter, legs, waving arms) at
+        # either half-cell offset keep every dot inside the 14 columns
+        saved = sl.alive_flags
+        sl.alive_flags = lambda s, t: {"blink": False, "hop": False, "breathe": True}
+        try:
+            for fam in sl.FAMILIES:
+                for seed in range(12):
+                    body = _dots(sl._breathe(sl._tiny_body(seed, fam), 5))
+                    for mood in ("calm", "working", "error", "red", "agitated"):
+                        if mood == "agitated" or (fam == "alien" and mood == "red"):
+                            continue  # arms or wide eyes change the count: own tests
+                        for t in range(NOW, NOW + 12):
+                            p = sl.tiny_pose(seed, mood, None, t, 60, fam)
+                            self.assertEqual(_dots(p["dots"]), body, (fam, seed, mood, t))
+        finally:
+            sl.alive_flags = saved
+
+    def test_half_cell_steps(self):
+        self.quiet()
+        dots = [self.tp("calm", NOW + i) for i in range(400)]
+        at = [2 * p["pos"] + p["sub"] for p in dots]
+        self.assertEqual(max(abs(a - b) for a, b in zip(at, at[1:])), 1)
+        self.assertEqual({p["sub"] for p in dots}, {0, 1})
+        for p in dots:
+            first = min(c for row in p["dots"] for c, v in enumerate(row) if v)
+            self.assertEqual(first, 1 + p["sub"])        # offset 1 = one dot right
+            base = sl._tiny_body(4, "alien")
+            self.assertEqual(p["dots"], sl._shift(base, p["sub"]))
+
+    def test_deterministic(self):
+        for mood in MOODS_ALL:
+            for t in (NOW, NOW + 3, NOW + 999):
+                self.assertEqual(self.tp(mood, t, since=t - 4), self.tp(mood, t, since=t - 4))
+
+    def test_tick_s_holds_the_frame(self):
+        for i in range(5):
+            self.assertEqual(self.tp("working", NOW * 5 + i, tick_len=5),
+                             self.tp("working", NOW, tick_len=1))
+
+    def test_alien_is_the_old_guy(self):
+        # seed-independent: two 2x2 eye holes a dot apart under a head row,
+        # arms at the top corners, green; o.o / -.- / >o.o< / \o.o/
+        self.quiet()
+        looks = set()
+        for s in range(50):
+            p = self.tp("calm", NOW, seed=s)
+            looks.add(str(sl._shift(p["dots"], -p["sub"])))
+        self.assertEqual(len(looks), 1)
+        p = self.tp("calm", NOW, seed=0)
+        cv = sl._shift(p["dots"], -p["sub"])  # body from dot column 1
+        x0 = 1
+        for r in (1, 2):
+            self.assertEqual([cv[r][x0 + c] for c in (2, 3, 5, 6)], ["e"] * 4)  # the o's
+            self.assertEqual(cv[r][x0 + 4], "b")                                # the .
+            self.assertEqual((cv[r][x0 + 1], cv[r][x0 + 7]), ("b", "b"))
+        self.assertTrue(all(cv[0][x0 + c] == "b" for c in (2, 3, 4, 5, 6)))      # head
+        self.assertEqual((cv[0][x0], cv[0][x0 + 8]), ("b", "b"))                 # arms out
+        self.assertEqual((cv[0][x0 + 1], cv[0][x0 + 7]), (None, None))
+        self.assertEqual(p["body"], 46)
+        cells = sl.braille(p["dots"])
+        self.assertEqual(sum(1 for c in cells if c), 5)                          # 5 cells wide
+
+    def test_alien_moods_keep_the_old_vocabulary(self):
+        self.quiet()
+        p = self.tp("agitated", NOW)
+        cv = sl._shift(p["dots"], -p["sub"])
+        self.assertEqual((cv[0][1], cv[0][9]), (None, None))         # >o.o<: in and down
+        self.assertEqual((cv[3][1], cv[3][9]), ("b", "b"))
+        self.assertEqual(p["body"], sl.AMBER)
+        red = self.tp("red", NOW)
+        self.assertEqual(red["body"], sl.RED_256)
+        cols = sorted({c for c in range(14) for r in (0, 1) if red["dots"][r][c]})
+        lo, hi = cols[0], cols[-1]
+        self.assertEqual((red["dots"][1][lo], red["dots"][1][hi]), ("b", "b"))  # \o.o/: up
+        self.assertEqual(self.tp("calm", NOW)["body"], 46)
+        self.assertEqual(self.tp("calm", NOW, color=198)["body"], 198)          # a pin wins
+
+    def test_blink_is_a_slit_and_breath_is_a_dot_wider(self):
+        t = _tick_with(4, blink=True)
+        cv = self.tp("calm", t)["dots"]
+        holes = [(r, c) for r in range(4) for c in range(14) if cv[r][c] == "e"]
+        self.assertEqual(sorted({r for r, _ in holes}), [2])  # -.- : a one-dot slit
+        self.assertEqual(len(holes), 4)
+        g = self.tp("calm", t, fam="beast")["dots"]
+        self.assertFalse(any(v == "e" for row in g for v in row))  # generated: eyes fill
+        q, b = _tick_with(4), _tick_with(4, breathe=True)
+        self.assertEqual(_width(self.tp("calm", b)["dots"]), _width(self.tp("calm", q)["dots"]) + 1)
+
+    def test_hop_rises_a_dot_row_while_calm_or_working(self):
+        t = _tick_with(4, hop=True)
+        for mood in ("calm", "working"):
+            self.assertFalse(any(self.tp(mood, t)["dots"][3]), mood)
+        for mood in ("idle", "error", "agitated"):
+            self.assertTrue(any(self.tp(mood, t)["dots"][3]), mood)
+
+    def test_yours_stops_and_waves(self):
+        self.quiet()
+        a, b = self.tp("yours", NOW), self.tp("yours", NOW + 1)
+        self.assertNotEqual(a["dots"], b["dots"])            # the arms go up and down
+        self.assertFalse(a["right"])
+        since = NOW - 100
+        walk = [self.tp("yours", since + i, since=since)["pos"] for i in range(30)]
+        self.assertEqual(walk, sorted(walk, reverse=True))  # parked: never walks right
+        for fam in ("beast", "bot", "blob"):
+            up = self.tp("yours", NOW, fam=fam)["dots"]
+            calm = self.tp("calm", NOW, fam=fam)["dots"]
+            self.assertEqual(_dots(up), _dots(calm) + 2, fam)  # two arm dots
+
+    def test_needs_bounces_with_a_yellow_question_mark(self):
+        self.quiet()
+        for fam in sl.FAMILIES:
+            even, odd = self.tp("needs", NOW, fam=fam), self.tp("needs", NOW + 1, fam=fam)
+            self.assertTrue(any(even["dots"][3]))
+            self.assertFalse(any(odd["dots"][3]))
+            for p in (even, odd):
+                box = sl.render_tiny(p)
+                cells = sl.braille(p["dots"])
+                self.assertIsNone(cells[p["ask"]], fam)        # beside it, not on it
+                self.assertIn("?", sl.strip_ansi(box))
+                self.assertTrue(_has_color(box, 226))
+
+    def test_idle_blinks_slowly_and_asleep_lies_flat(self):
+        self.quiet()
+        shut = [sum(v == "e" for row in self.tp("idle", NOW + i)["dots"] for v in row) < 8
+                for i in range(6)]
+        self.assertEqual(sum(shut), 2)
+        for fam in sl.FAMILIES:
+            for t in range(NOW, NOW + 30):
+                p = self.tp("asleep", t, fam=fam)
+                self.assertFalse(any(p["dots"][0]) or any(p["dots"][1]), (fam, t))
+                self.assertFalse(any(v == "e" for row in p["dots"] for v in row))
+        sl.alive_flags = TestTinyPose._real_flags
+        for t in range(NOW, NOW + 60):  # blinks and hops never wake it
+            p = self.tp("asleep", t)
+            self.assertFalse(any(p["dots"][0]) or any(p["dots"][1]), t)
+
+    def test_error_shakes_and_red_jitters(self):
+        self.quiet()
+        a, b = self.tp("error", NOW), self.tp("error", NOW + 1)
+        self.assertEqual(a["pos"], b["pos"])
+        self.assertIn(b["dots"], (sl._shift(a["dots"], 2), sl._shift(a["dots"], -2)))
+        firsts = {min(c for row in self.tp("red", NOW + i)["dots"] for c, v in enumerate(row) if v)
+                  - self.tp("red", NOW + i)["sub"] for i in range(40)}
+        self.assertGreater(len(firsts), 1)
+
+    def test_scatter_on_mood_change(self):
+        self.quiet()
+        steady = self.tp("working", NOW)["dots"]
+        a = self.tp("working", NOW, since=NOW - 1)["dots"]
+        self.assertNotEqual(a, steady)
+        self.assertEqual(_dots(a), _dots(steady))
+        self.assertEqual(self.tp("working", NOW, since=NOW - 11)["dots"], steady)
+
+
+TestTinyPose._real_flags = sl.alive_flags
+
+
+class TestTinyFrame(CreatureCase):
+    ROW = sl.NEON_GREEN + "┌─" + sl.R + "x" * 20
+    LOOK = {"seed": 11, "family": "alien", "color": None}
+
+    def test_box_on_the_rule_and_the_frame_never_moves(self):
+        for mood in MOODS_ALL:
+            for bubble in ("", "ready", "y" * 18, "日本語のふきだし"):
+                for cols in range(24, 200, 9):
+                    for now in (NOW, NOW + 1, NOW + 170):
+                        pres = {"mood": mood, "bubble": bubble, "since": now - 7,
+                                "mood_since": now - 7, "icon": ""}
+                        row1 = sl._frame_tiny(self.ROW, cols, True, 50, now, pres, self.LOOK)
+                        bare = sl._frame(self.ROW, cols, "┐", True)
+                        label = (mood, bubble, cols, now)
+                        self.assertEqual(sl.vislen(row1), cols, label)
+                        p_row = sl.strip_ansi(row1)
+                        self.assertEqual(p_row[:23], sl.strip_ansi(bare)[:23], label)
+                        self.assertTrue(p_row.endswith("┐"), label)
+                        track = cols - sl.vislen(self.ROW) - 2
+                        if track < 11:
+                            self.assertEqual(row1, bare, label)
+                            continue
+                        p = sl.tiny_pose(11, mood, now - 7, now, track, "alien")
+                        col = sl.vislen(self.ROW) + 1 + p["pos"]
+                        self.assertEqual(_cells(p_row)[col:col + 7],
+                                         _cells(sl.strip_ansi(sl.render_tiny(p))), label)
+
+    def test_bubble_beside_it_on_the_rule(self):
+        pres = {"mood": "yours", "bubble": "ready", "since": NOW, "mood_since": None}
+        row1 = sl._frame_tiny(self.ROW, 120, True, 50, NOW, pres, self.LOOK)
+        self.assertRegex(sl.strip_ansi(row1), r"[⠁-⣿]─*╴ready|ready╶─*[⠁-⣿]")
+
+    def test_the_box_is_one_agent_link(self):
+        action = lambda name, text, extra="": sl.link("retro-hud://" + name, text)
+        pres = {"mood": "working", "bubble": "ready", "since": NOW, "mood_since": None}
+        row1 = sl._frame_tiny(self.ROW, 120, True, 50, NOW, pres, self.LOOK, action)
+        self.assertEqual(row1.count("retro-hud://agent"), 1)
+        self.assertNotIn("ready\a", row1)
+
+    def test_hud_tiny_two_lines_rows_unchanged(self):
+        os.environ["RETRO_HUD_CREATURE"] = "tiny"
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        for cols in range(50, 241, 10):
+            for t in (NOW, NOW + 1, NOW + 30):
+                on = sl.render(self.payload(FULL), cols, t)
+                os.environ["RETRO_HUD_CREATURE"] = "0"
+                off = sl.render(self.payload(FULL), cols, t)
+                os.environ["RETRO_HUD_CREATURE"] = "tiny"
+                self.assertEqual(len(on), 2)
+                self.assertEqual(on[1], off[1], cols)
+                self.assertEqual(sl.vislen(on[0]), sl.vislen(off[0]), cols)
+                self.assertEqual(sl.strip_ansi(on[0])[-1], "┐")
+
+    def test_tick_s_is_honoured(self):
+        os.environ["RETRO_HUD_CREATURE"] = "tiny"
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        start = NOW - NOW % 5
+        one = [sl.render(self.payload(FULL), 200, start + i)[0] for i in range(5)]
+        self.assertGreater(len(set(one)), 1)            # a new frame every second
+        os.environ["RETRO_HUD_TICK_S"] = "5"
+        five = [sl.render(self.payload(FULL), 200, start + i)[0] for i in range(5)]
+        self.assertEqual(len(set(five)), 1)              # one frame per 5 s
+
+
 class TestCreatureCLI(unittest.TestCase):
     SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
 
