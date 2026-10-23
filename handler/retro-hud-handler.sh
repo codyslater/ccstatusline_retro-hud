@@ -438,7 +438,7 @@ agent_menu() {
     fi
     show_menu "$AGENT_NAME" \
         "wave" w "$(menu_cmd agent "$pane" wave)" \
-        "quiet 1h" q "$(menu_cmd agent "$pane" quiet)" \
+        "quiet 1h" h "$(menu_cmd agent "$pane" quiet)" \
         "sprite ▸" s "$(menu_cmd agent "$pane" sprites)" \
         ${extra[@]+"${extra[@]}"} \
         "status" i "$(menu_cmd agent "$pane" status)"
