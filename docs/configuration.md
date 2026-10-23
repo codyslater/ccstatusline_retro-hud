@@ -7,13 +7,16 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | Env var | Default | Effect |
 |---------|---------|--------|
 | `RETRO_HUD_FRAME` | `1` | `0` disables the right-edge frame fill |
-| `RETRO_HUD_ALIEN` | `1` | `0` grounds the alien (and with it all agent presence: no transcript reads, no files) |
-| `RETRO_HUD_PRESENCE` | `1` | `0` restores the gauge-only alien: it reacts to the gauges but not to what the agent is doing |
-| `RETRO_HUD_SPRITE` | `alien` | presence sprite set: `alien`, `cat`, `robot`, `ghost` |
+| `RETRO_HUD_CREATURE` | `1` | the [pixel creature](../README.md#agent-presence) on a head line above the frame: the HUD is three lines. `0` restores the 2.x two-row HUD with the text-art alien, byte for byte |
+| `RETRO_HUD_CREATURE_SEED` | session id | pins the creature's body and colour: any integer or string (strings are hashed with CRC-32). A `seed` in the session's state file (the click menu's *reroll*) wins over it |
+| `RETRO_HUD_CREATURE_COLOR` | from the seed | pins the body colour: `pink`, `green`, `purple`, `cyan`, `orange`, or a 256-colour index `0`–`255`. Amber and red still take over when a gauge is hot |
+| `RETRO_HUD_ALIEN` | `1` | `0` grounds the creature (or the 2.x alien) and with it all agent presence: no transcript reads, no files. The head line stays, blank |
+| `RETRO_HUD_PRESENCE` | `1` | `0` restores the gauge-only creature: it reacts to the gauges but not to what the agent is doing |
+| `RETRO_HUD_SPRITE` | `alien` | creature family: `blob`, `beast`, `alien`, `bot` (the 2.x names `cat`, `robot`, `ghost` map to `beast`, `bot`, `blob`). With `RETRO_HUD_CREATURE=0`, the text-art set: `alien`, `cat`, `robot`, `ghost` |
 | `RETRO_HUD_AGENT_NAME` | — | name the agent that lives in this terminal; prefixes state bubbles (`Nova: ready`) |
-| `RETRO_HUD_BUBBLES` | `alerts` | what the alien may say: `alerts` = only `need you` / `compact?` / `limit soon` plus events-channel messages; `all` = also `ready`, `hm.`, `z`/`zZ` and idle quips; `off` = nothing |
+| `RETRO_HUD_BUBBLES` | `alerts` | what the creature may say: `alerts` = only `need you` / `compact?` / `limit soon` plus events-channel messages; `all` = also `ready`, `hm.`, `z`/`zZ` and idle quips; `off` = nothing |
 | `RETRO_HUD_QUIPS` | `1` | `0` turns off the rare idle quips |
-| `RETRO_HUD_IDLE_MIN` | `10` | minutes of "your turn" before the alien goes idle |
+| `RETRO_HUD_IDLE_MIN` | `10` | minutes of "your turn" before the creature goes idle |
 | `RETRO_HUD_SLEEP_MIN` | `60` | minutes of "your turn" before it falls asleep |
 | `RETRO_HUD_CACHE_DIR` | `~/.cache/retro-hud` | where the per-session state, events and hook files live (falls back to `/tmp/retro-hud-<uid>` without a usable home). `presence-hook.sh` honours it too |
 | `RETRO_HUD_COST_MODE` | `cycle` | `cycle`: duration and cost share one field, alternating every 30s and padded to the wider label so the flip moves nothing; `both`: two segments (`T:…` and `$…`) |
@@ -78,7 +81,7 @@ to `~/.claude/settings.json`:
 ```
 
 `refreshInterval` re-renders every 5 seconds while idle so rate-limit
-countdowns tick, the alien patrols, and the frame re-fits within seconds of
+countdowns tick, the creature patrols, and the frame re-fits within seconds of
 a terminal resize (Claude Code doesn't re-run the statusline on resize, so
 the interval is what picks up the new width). Agent presence **requires**
 it: without it the idle and asleep states never show and bubbles don't

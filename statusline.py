@@ -2,8 +2,9 @@
 """Claude Code statusLine — RETRO SCI-FI HUD
 
 Two-row HUD with a full wireframe, zoned gauges, and width-aware
-degradation. Reads the statusline JSON payload on stdin and prints
-two ANSI rows sized to $COLUMNS.
+degradation, plus a head line above it for the pixel creature. Reads the
+statusline JSON payload on stdin and prints three ANSI lines sized to
+$COLUMNS (two with RETRO_HUD_CREATURE=0).
 
 Flags:
     --version   print version and exit
@@ -22,7 +23,8 @@ Env toggles:
                                  cycle (alternate % and time-to-reset every
                                  30s, every 10s in the red zone), pct, time,
                                  or both
-    RETRO_HUD_ALIEN=0            ground the alien that patrols the top rule
+    RETRO_HUD_ALIEN=0            ground the creature (or alien) that patrols
+                                 the top rule; the head line stays, blank
     RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
                                  always, or never
     RETRO_HUD_MARGIN=4           columns kept free at the right edge (raise if
@@ -38,10 +40,18 @@ Env toggles:
                                  tmux only); the rate-limit gauges link to
                                  retro-hud://usage everywhere. Needs a
                                  handler for the scheme (install.sh --handler)
-    RETRO_HUD_PRESENCE=0         gauge-only alien: ignore what the agent does
-    RETRO_HUD_SPRITE=alien       presence sprite set: alien, cat, robot, ghost
+    RETRO_HUD_PRESENCE=0         gauge-only creature: ignore what the agent does
+    RETRO_HUD_CREATURE=0         the 2.x two-row HUD with the text-art alien
+    RETRO_HUD_CREATURE_SEED=<s>  pin the creature's look (integer or any
+                                 string; default: the session id)
+    RETRO_HUD_CREATURE_COLOR=<c> pin its colour: pink, green, purple, cyan,
+                                 orange or a 256-colour index
+    RETRO_HUD_SPRITE=alien       creature family: blob, beast, alien, bot (the
+                                 2.x names cat, robot, ghost map to beast,
+                                 bot, blob); with the creature off, the
+                                 text-art set: alien, cat, robot, ghost
     RETRO_HUD_AGENT_NAME=<name>  prefix state bubbles ("Nova: ready")
-    RETRO_HUD_BUBBLES=alerts     what the alien may say: alerts (default) =
+    RETRO_HUD_BUBBLES=alerts     what the creature may say: alerts (default) =
                                  only "need you" / "compact?" / "limit soon"
                                  plus events-channel messages; all = also the
                                  narration ("ready", "hm.", z/zZ, idle quips);
@@ -51,18 +61,20 @@ Env toggles:
     RETRO_HUD_SLEEP_MIN=60       minutes of "your turn" before asleep
     RETRO_HUD_CACHE_DIR=<dir>    presence files (default ~/.cache/retro-hud)
 
-Agent presence: the alien on the top rule follows the session's agent,
+Agent presence: the creature on the top rule (a seeded 9x4 pixel monster
+drawn in half blocks, upper half on the head line) follows the session's agent,
 read from a bounded tail of the transcript (entry type, stop reason,
 error flag and timestamp only; never message text) and, when
 `install.sh --hooks` was run, from presence-hook.sh's log. It hustles
 while the agent works, waves when the turn is yours, beckons at a
 permission prompt, flinches at a burst of tool errors, then dozes and
 sleeps; a red- or amber-zone gauge still takes precedence. Short bubbles
-on the rule come from the events channel
-(<cache>/<session_id>.events.jsonl, one {"ts", "text", "ttl"} per line),
-from state changes, and from rare idle quips; an event whose text is
-"wave" makes the sprite wave instead. With RETRO_HUD_ACTIONS=1 in tmux
-the sprite links to retro-hud://agent (wave, quiet, sprite, status).
+beside it come from the events channel
+(<cache>/<session_id>.events.jsonl, one {"ts", "text", "ttl", "icon"}
+per line; "icon" is one character the creature holds up), from state
+changes, and from rare idle quips; an event whose text is "wave" makes it
+wave instead. With RETRO_HUD_ACTIONS=1 in tmux the creature links to
+retro-hud://agent (wave, quiet, sprite, reroll, status).
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
@@ -72,7 +84,7 @@ the % is always the token touching its own bar. Each gauge escalates on
 its own, and the pinned label is the last thing row 2 gives up when the
 terminal narrows, so neither number flickers away under you.
 """
-__version__ = "2.9.0"
+__version__ = "3.0.0"
 
 import calendar
 import json

@@ -4,6 +4,58 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v3.0.0] — 2026-10-22
+
+### Changed (breaking)
+- **The HUD is three lines by default.** A head line above the frame
+  carries the new pixel creature's upper half and its bubble; rows 1
+  and 2 keep their content, width and corners. `RETRO_HUD_CREATURE=0`
+  restores the v2.9.0 two-row output byte for byte, text-art alien
+  included.
+
+### Added
+- **Pixel creature.** The agent's presence is now a small mirrored pixel
+  monster: a 9×4 body generated from a seed (the session id, or
+  `RETRO_HUD_CREATURE_SEED`), always 4-connected, two eyes on its second
+  pixel row, legs underneath. It is drawn in half blocks with a
+  256-colour foreground and background per cell, its upper half on the
+  head line and its lower half standing on the top rule, inside a fixed
+  13-cell box on both lines, so nothing else ever shifts. Below a
+  17-cell rule it hides and the head line is blank.
+- Families (`RETRO_HUD_SPRITE`): `alien` (default: antennae, three legs),
+  `beast`, `blob`, `bot`. The 2.x sprite names map to them (`cat` →
+  beast, `robot` → bot, `ghost` → blob).
+- Colour from the seed: pink, green, purple or cyan;
+  `RETRO_HUD_CREATURE_COLOR` pins a name or a 256-colour index. The body
+  turns amber (agitated) or red (red zone) under a hot gauge; otherwise
+  the mood shows in the pose and the eyes.
+- Poses: a walk cycle while working, arms up and a jump when the turn is
+  yours, a bounce with a yellow `?` when a prompt waits, squashed with
+  blinking dim eyes when idle, melted flat onto the rule when asleep
+  (head line empty), a shake with pink `x` eyes on an error burst, a
+  spin then a shake in the red zone, wide eyes when agitated. When a
+  mood starts the creature scatters into loose pixels and reassembles
+  over 10s. Parked moods walk to the left end of the rule and stay
+  there. Every frame is a pure function of seed, mood, mood start and
+  clock: a refresh never re-rolls it.
+- Events-channel lines may carry `"icon": "<one character>"`, which the
+  creature holds up in yellow beside its head while the line is live
+  (with or without `text`).
+- The state file records `mood` and `mood_since` (when the current mood
+  began; it times the entry tics) and `creature` (the family, so the
+  click menu knows the creature is on). A `seed` or `sprite` in it wins
+  over the environment.
+- Click menu: **reroll** writes a new random `seed` for the session and
+  shows `pin it with RETRO_HUD_CREATURE_SEED=<n>`; **sprite ▸** offers
+  the families while the creature is on.
+
+### Notes
+- The creature appears wherever the alien did, gauge-only mode included.
+  With `RETRO_HUD_ALIEN=0`, `RETRO_HUD_FRAME=0`, a short rule or a
+  degraded render, the head line is a blank line, so the HUD never
+  jumps between two and three lines.
+- `MOOD_COLORS` now only colours the 2.x text-art sets.
+
 ## [v2.9.0] — 2026-10-22
 
 ### Changed
