@@ -3855,6 +3855,239 @@ class TestExcursionSchedule(unittest.TestCase):
                                      sl.excursion_at(9, base, tick_len))
 
 
+def _when(kind, seed=0, sit=None):
+    """The first excursion of `kind` from NOW on, for `seed`."""
+    for b in range(NOW // 600, NOW // 600 + 1000):
+        p = sl.excursion_plan(seed, b)
+        if p["kind"] == kind and (sit is None or p["sit"] == sit):
+            return p
+    raise AssertionError(kind)
+
+
+_TINY_CELL = re.compile("[⠁-⣿]")
+_BIG_CELL = re.compile("[▀▄]")
+
+
+def _creature_cols(plain, pat):
+    return [i for i, ch in enumerate(_cells(plain)) if pat.match(ch)]
+
+
+class ExcursionCase(CreatureCase):
+    """Excursions on (the suite pins them off), a fixed seed and rows with
+    a coloured, linked badge, a wide emoji and a cost field."""
+    ROW1 = (sl.NEON_GREEN + "┌─" + sl.R + sl.MODEL_BOX + "[" + sl.R + " X " + sl.MODEL_BOX +
+            "]" + sl.R + sl.SEP + sl.NEON_WHT + "\U0001F4C2 dir" + sl.R + sl.SEP +
+            sl.BRANCH_BADGE + " ⎇ " + sl.link("https://example.com/b", "main") + " " + sl.R)
+    ROW2 = sl.NEON_GREEN + "└─" + sl.R + "42%" + sl.SEP + sl.NEON_YEL + "$3.21" + sl.R
+    LOOK = {"seed": 0, "family": "alien", "color": None}
+    CALM = {"mood": "calm", "bubble": "", "since": 0, "mood_since": None, "icon": ""}
+
+    def setUp(self):
+        super().setUp()
+        os.environ["RETRO_HUD_EXCURSIONS"] = "1"
+
+    def tearDown(self):
+        os.environ["RETRO_HUD_EXCURSIONS"] = "0"
+        super().tearDown()
+
+    def ex(self, size, now, cols=100, pres=None, look=None, row1=None, row2=None):
+        return sl.excursion_rows(size, row1 or self.ROW1, row2 or self.ROW2, cols, True, 30,
+                                 now, self.CALM if pres is None else pres, look or self.LOOK)
+
+    def frames(self, size, kind, cols=100, sit=None, seed=0):
+        p = _when(kind, seed, sit)
+        look = dict(self.LOOK, seed=seed)
+        return [self.ex(size, t, cols, look=look) for t in range(p["start"], p["start"] + p["dur"])]
+
+    def check_frame(self, rows, cols, label):
+        self.assertIsNotNone(rows, label)
+        for r, (lead, corner) in zip(rows, (("┌─", "┐"), ("└─", "┘"))):
+            plain = sl.strip_ansi(r)
+            self.assertEqual(sl.vislen(r), cols, label)
+            self.assertEqual((plain[:2], plain[-1]), (lead, corner), label)
+
+
+class TestExcursionFrames(ExcursionCase):
+    def test_every_kind_in_both_sizes_keeps_the_rows_in_shape(self):
+        for size in ("tiny", "big"):
+            for kind in sl.EXCURSION_KINDS:
+                for cols in (60, 100, 173):
+                    for i, rows in enumerate(self.frames(size, kind, cols)):
+                        self.check_frame(rows, cols, (size, kind, cols, i))
+
+    def test_link_and_badge_survive_every_frame(self):
+        for size in ("tiny", "big"):
+            for kind in sl.EXCURSION_KINDS:
+                for rows in self.frames(size, kind):
+                    self.assertEqual(rows[0].count("\033]8;;https://example.com/b\a"), 1)
+                    self.assertEqual(rows[0].count("\033]8;;\a"), 1)
+                    self.assertIn(sl.BRANCH_BADGE, rows[0])
+
+    def test_stretch_doubles_the_body(self):
+        normal = len(_creature_cols(sl.strip_ansi(sl._frame_tiny(
+            self.ROW1, 100, True, 30, NOW, self.CALM, self.LOOK)), _TINY_CELL))
+        widths = [len(_creature_cols(sl.strip_ansi(r[0]), _TINY_CELL))
+                  for r in self.frames("tiny", "stretch")]
+        self.assertGreaterEqual(max(widths), 2 * normal - 1, widths)
+        def span(rows):
+            return len(set(_creature_cols(sl.strip_ansi(rows[0]), _BIG_CELL)) |
+                       set(_creature_cols(sl.strip_ansi(rows[1]), _BIG_CELL)))
+        home = span(sl._frame_big(self.ROW1, self.ROW2, 100, True, 30, NOW, self.CALM,
+                                  self.LOOK))
+        big = [span(r) for r in self.frames("big", "stretch")]
+        self.assertGreaterEqual(max(big), 2 * home - 2, (home, big))
+
+    def test_peek_hides_behind_the_right_corner(self):
+        frames = self.frames("tiny", "peek")
+        seen = [_creature_cols(sl.strip_ansi(r[0]), _TINY_CELL) for r in frames]
+        self.assertIn([], seen)  # behind the corner for a moment
+        peeks = [c for c in seen if c and len(c) <= 3 and c[-1] == 98]
+        self.assertTrue(peeks, seen)  # a sliver against the corner: eyes and arms
+
+    def test_crawl_walks_over_the_words_and_back(self):
+        frames = self.frames("tiny", "crawl")
+        left = [min(_creature_cols(sl.strip_ansi(r[0]), _TINY_CELL) or [999]) for r in frames]
+        self.assertEqual(min(left), 2)
+        self.assertGreater(left[0], 30)
+        self.assertGreater(left[-1], 20)
+        mid = sl.strip_ansi(frames[left.index(2)][0])
+        self.assertNotIn("[ X", mid)  # the model box is covered …
+        self.assertTrue(all(sl.strip_ansi(r[1]) == sl.strip_ansi(
+            sl._frame(self.ROW2, 100, "┘", True)) for r in frames))  # … row 2 is not
+        big = [min(_creature_cols(sl.strip_ansi(r[0]), _BIG_CELL) or [999])
+               for r in self.frames("big", "crawl")]
+        self.assertEqual(min(big), 2)
+
+    def test_downstairs_visits_row_2_and_may_sit_on_the_cost(self):
+        for sit in (True, False):
+            frames = self.frames("tiny", "downstairs", sit=sit)
+            down = [r for r in frames if _creature_cols(sl.strip_ansi(r[1]), _TINY_CELL)
+                    and not _creature_cols(sl.strip_ansi(r[0]), _TINY_CELL)]
+            self.assertTrue(down, sit)
+            covered = [r for r in down if "$3.21" not in sl.strip_ansi(r[1])]
+            self.assertEqual(bool(covered), sit)
+            self.assertTrue(_creature_cols(sl.strip_ansi(frames[0][0]), _TINY_CELL))
+            self.assertTrue(_creature_cols(sl.strip_ansi(frames[-1][0]), _TINY_CELL))
+        big = self.frames("big", "downstairs")
+        self.assertTrue(any(_creature_cols(sl.strip_ansi(r[1]), _BIG_CELL) and not
+                            _creature_cols(sl.strip_ansi(r[0]), _BIG_CELL) for r in big))
+
+    def test_hang_dangles_upside_down_under_the_corner(self):
+        frames = self.frames("tiny", "hang")
+        hung = [r for r in frames if _creature_cols(sl.strip_ansi(r[1]), _TINY_CELL)]
+        self.assertTrue(hung)
+        for r in hung:
+            self.assertGreaterEqual(max(_creature_cols(sl.strip_ansi(r[1]), _TINY_CELL)), 96)
+        p = sl.tiny_pose(0, "calm", None, NOW, 50)
+        flipped = [ch for ch in sl.braille(p["dots"][::-1]) if ch]
+        self.assertTrue(any(set(flipped) & set(sl.strip_ansi(r[1])) for r in hung))
+        big = self.frames("big", "hang")
+        self.assertTrue(any(_creature_cols(sl.strip_ansi(r[0]), _BIG_CELL) and
+                            max(_creature_cols(sl.strip_ansi(r[0]), _BIG_CELL)) >= 96
+                            for r in big))
+
+    def test_frames_are_pure_and_differ_from_home(self):
+        for kind in sl.EXCURSION_KINDS:
+            p = _when(kind)
+            t = p["start"] + p["dur"] // 2
+            self.assertEqual(self.ex("tiny", t), self.ex("tiny", t))
+            home = (sl._frame_tiny(self.ROW1, 100, True, 30, t, self.CALM, self.LOOK),
+                    sl._frame(self.ROW2, 100, "┘", True))
+            self.assertNotEqual(self.ex("tiny", t), home, kind)
+            self.assertIsNone(self.ex("tiny", p["start"] - 1))
+            self.assertIsNone(self.ex("tiny", p["start"] + p["dur"]))
+
+
+class TestExcursionGates(ExcursionCase):
+    def active(self):
+        p = _when("crawl")
+        return p["start"] + 3
+
+    def test_only_calm_idle_and_yours_go_exploring(self):
+        t = self.active()
+        for mood in MOODS_ALL:
+            pres = dict(self.CALM, mood=mood)
+            got = self.ex("tiny", t, pres=pres)
+            if mood in ("calm", "idle", "yours"):
+                self.assertIsNotNone(got, mood)
+            else:
+                self.assertIsNone(got, mood)
+        # gauge-only: calm under 70%, never amber or red
+        for pct, on in ((30, True), (75, False), (95, False)):
+            got = sl.excursion_rows("tiny", self.ROW1, self.ROW2, 100, True, pct, t, None,
+                                    self.LOOK)
+            self.assertEqual(got is not None, on, pct)
+
+    def test_a_bubble_or_an_icon_keeps_it_home(self):
+        t = self.active()
+        self.assertIsNone(self.ex("tiny", t, pres=dict(self.CALM, bubble="hello")))
+        self.assertIsNone(self.ex("tiny", t, pres=dict(self.CALM, icon="!")))
+
+    def test_off_switches(self):
+        t = self.active()
+        self.assertIsNone(self.ex("tall", t))
+        self.assertIsNone(self.ex("off", t))
+        self.assertIsNone(sl.excursion_rows("tiny", self.ROW1, self.ROW2, 100, False, 30, t,
+                                            self.CALM, self.LOOK))
+        self.assertIsNone(sl.excursion_rows("tiny", self.ROW1, self.ROW2, 100, True, None, t,
+                                            self.CALM, self.LOOK))
+        self.assertIsNone(self.ex("tiny", t, cols=sl.vislen(self.ROW1) + 1 + sl.TINY_MIN_TRACK))
+        n = sl.vislen(self.ROW1)
+        self.assertIsNone(self.ex("big", t, cols=n + 1 + sl.CREATURE_MIN_TRACK))
+        self.assertIsNotNone(self.ex("big", t, cols=n + 2 + sl.CREATURE_MIN_TRACK))
+        os.environ["RETRO_HUD_EXCURSIONS"] = "0"
+        self.assertIsNone(self.ex("tiny", t))
+
+    def test_render_knob_off_is_byte_identical(self):
+        os.environ["RETRO_HUD_CREATURE_SEED"] = "0"
+        for size in ("tiny", "big"):
+            os.environ["RETRO_HUD_CREATURE"] = size
+            for kind in sl.EXCURSION_KINDS:
+                p = _when(kind)
+                for t in (p["start"], p["start"] + p["dur"] // 2):
+                    on = sl.render(self.payload(MINIMAL), 120, t)
+                    os.environ["RETRO_HUD_EXCURSIONS"] = "0"
+                    off = sl.render(self.payload(MINIMAL), 120, t)
+                    os.environ["RETRO_HUD_EXCURSIONS"] = "1"
+                    saved = sl.excursion_at
+                    sl.excursion_at = lambda *a, **k: None
+                    try:
+                        never = sl.render(self.payload(MINIMAL), 120, t)
+                    finally:
+                        sl.excursion_at = saved
+                    self.assertEqual(off, never, (size, kind))
+                    self.assertNotEqual(on, off, (size, kind, t))
+                    for a, b in zip(on, off):
+                        self.assertEqual(sl.vislen(a), sl.vislen(b))
+            os.environ["RETRO_HUD_CREATURE"] = "tall"
+            p = _when("crawl")
+            on = sl.render(self.payload(MINIMAL), 120, p["start"] + 2)
+            os.environ["RETRO_HUD_EXCURSIONS"] = "0"
+            self.assertEqual(on, sl.render(self.payload(MINIMAL), 120, p["start"] + 2))
+            os.environ["RETRO_HUD_EXCURSIONS"] = "1"
+
+    def test_working_never_leaves_in_the_full_hud(self):
+        os.environ["RETRO_HUD_CREATURE"] = "tiny"
+        os.environ["RETRO_HUD_CREATURE_SEED"] = "0"
+        p = _when("downstairs")
+        t = p["start"] + 5
+        self.tx(user(t - 50), asst(t - 2, "tool_use"))
+        on = sl.render(self.payload(FULL), 160, t)
+        os.environ["RETRO_HUD_EXCURSIONS"] = "0"
+        self.assertEqual(on, sl.render(self.payload(FULL), 160, t))
+
+    def test_tick_s_5_shows_it_and_holds_each_frame(self):
+        os.environ["RETRO_HUD_CREATURE"] = "tiny"
+        os.environ["RETRO_HUD_CREATURE_SEED"] = "0"
+        os.environ["RETRO_HUD_TICK_S"] = "5"
+        p = _when("crawl")
+        t0 = p["start"] - p["start"] % 5 + 5
+        a = [sl.render(self.payload(MINIMAL), 120, t0 + i) for i in range(5)]
+        self.assertEqual(len({tuple(x) for x in a}), 1)
+        os.environ["RETRO_HUD_EXCURSIONS"] = "0"
+        self.assertNotEqual(a[0], sl.render(self.payload(MINIMAL), 120, t0))
+
+
 class TestCreatureCLI(unittest.TestCase):
     SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
 

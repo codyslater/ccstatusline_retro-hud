@@ -1594,6 +1594,24 @@ def _sgr(fg=None, bg=None):
         ([] if bg is None else ["48;5;{}".format(bg)])))
 
 
+def _half_cell(t, b, p):
+    """One half-block cell for top pixel `t` over bottom pixel `b` (None,
+    "b", "e" or "x") in pose `p`'s colours, ending with a reset; None
+    when both are empty."""
+    def colour(tok):
+        return p["eye"] if tok == "e" else p["body"]
+
+    if "x" in (t, b):
+        return "\033[1m" + _sgr(p["x"], p["body"]) + "x" + R
+    if t and b:
+        return _sgr(colour(t), colour(b)) + "▀" + R
+    if t:
+        return _sgr(colour(t)) + "▀" + R
+    if b:
+        return _sgr(colour(b)) + "▄" + R
+    return None
+
+
 def render_box(p, rule_top=False):
     """(upper cells, lower cells) for a pose: two strings of visible
     width 13. One text cell holds two pixel rows (▀ top / ▄ bottom, fg
@@ -1601,25 +1619,14 @@ def render_box(p, rule_top=False):
     cells are rule ─, except on the tall layout's head line (spaces)
     unless `rule_top`."""
     cv = p["canvas"]
-
-    def colour(tok):
-        return p["eye"] if tok == "e" else p["body"]
-
     lines = []
     for row in (0, 1):
         cells = []
         for c in range(BOX_W):
-            t, b = cv[2 * row][c], cv[2 * row + 1][c]
-            if "x" in (t, b):
-                cells.append("\033[1m" + _sgr(p["x"], p["body"]) + "x" + R)
-            elif t and b:
-                cells.append(_sgr(colour(t), colour(b)) + "▀" + R)
-            elif t:
-                cells.append(_sgr(colour(t)) + "▀" + R)
-            elif b:
-                cells.append(_sgr(colour(b)) + "▄" + R)
-            else:
-                cells.append(" " + R if row == 0 and not rule_top else RULE + "─" + R)
+            cell = _half_cell(cv[2 * row][c], cv[2 * row + 1][c], p)
+            if cell is None:
+                cell = " " + R if row == 0 and not rule_top else RULE + "─" + R
+            cells.append(cell)
         lines.append(cells)
     mark = lambda ch: "\033[1m" + _sgr(ICON_256) + ch + R
     if p.get("ask") is not None:
@@ -1667,6 +1674,206 @@ def excursion_at(seed, now, tick_len=1):
     if not first <= tick < first + n:
         return None
     return dict(plan, phase=tick - first, n=n)
+
+
+def _double(cv):
+    return [[v for v in row for _ in (0, 1)] for row in cv]
+
+
+def _half_again(cv):  # one and a half times as wide: every other column twice
+    return [[v for c, v in enumerate(row) for _ in range(1 + c % 2)] for row in cv]
+
+
+def _peeking(cv):
+    """Only what shows round a corner: the head rows up to and including
+    the first eye (and the arm beside it); the legs are hidden."""
+    w = len(cv[0])
+    eyes = [c for c in range(w) if any(cv[r][c] in ("e", "x") for r in range(4))]
+    if eyes:
+        cut = eyes[0]
+        while cut + 1 in eyes:
+            cut += 1
+        cut += 1  # the rim right of the eye
+    else:  # eyes shut this frame: the first few columns
+        s = _span(_merge(_merge(cv[0], cv[1]), cv[2]))
+        cut = (s[0] if s else 0) + 3
+    return [row[:cut + 1] + [None] * (w - cut - 1) for row in cv[:3]] + [[None] * w]
+
+
+def _sprite(rows, row):
+    """{"rows": cell rows trimmed to the columns they draw in, "off": the
+    first kept column, "w", "row": 0 row 1 / 1 row 2 (its top row)}."""
+    used = [c for c in range(len(rows[0])) if any(r[c] is not None for r in rows)]
+    if not used:
+        return None
+    a, b = used[0], used[-1] + 1
+    return {"rows": [r[a:b] for r in rows], "off": a, "w": b - a, "row": row}
+
+
+def _sprites(size, p):
+    """The creature of pose `p` as the excursions draw it: "home" (as on
+    the rule), "half" / "wide" (stretched), "peek", "crawl" (row 1),
+    "down" (row 2) and "hang" (upside down)."""
+    if size == "tiny":
+        def cells(dots):
+            if len(dots[0]) % 2:
+                dots = [row + [None] for row in dots]
+            return [[None if ch is None else _sgr(p["body"]) + ch + R
+                     for ch in braille(dots)]]
+        cv = p["dots"]
+        body = cells(cv)
+        return {"home": _sprite(body, 0), "crawl": _sprite(body, 0),
+                "down": _sprite(body, 1), "half": _sprite(cells(_half_again(cv)), 0),
+                "wide": _sprite(cells(_double(cv)), 0), "peek": _sprite(cells(_peeking(cv)), 0),
+                "hang": _sprite(cells(cv[::-1]), 1)}
+
+    def cells(cv):
+        return [[_half_cell(cv[2 * r][c], cv[2 * r + 1][c], p) for c in range(len(cv[0]))]
+                for r in range(len(cv) // 2)]
+    cv = p["canvas"]
+    flat = cells([_merge(cv[0], cv[1]), _merge(cv[2], cv[3])])
+    return {"home": _sprite(cells(cv), 0), "crawl": _sprite(flat, 0), "down": _sprite(flat, 1),
+            "half": _sprite(cells(_half_again(cv)), 0), "wide": _sprite(cells(_double(cv)), 0),
+            "peek": _sprite(cells(_peeking(cv)), 0), "hang": _sprite(cells(cv[::-1]), 0)}
+
+
+def _lerp(a, b, f):
+    return a + int(round((b - a) * min(max(f, 0.0), 1.0)))
+
+
+def _put(s, x, geo):
+    """Overlays for sprite `s` with its first column at x, kept off the
+    leads and the corners."""
+    x = max(2, min(x, geo["cols"] - 1 - s["w"]))
+    return [(s["row"] + i, x, cells) for i, cells in enumerate(s["rows"])]
+
+
+def _corner_x(s, geo):  # right up against the corner
+    return geo["cols"] - 1 - s["w"]
+
+
+# Each excursion is a pure frame function: (sprites, phase, n frames,
+# geometry, sit) -> overlays [(row 0/1, column, cells)]. Geometry: "cols",
+# "home" / "back" (the body's first column on the rule when it leaves and
+# when it is due back), "rule2" (row 2's first free rule column), "seat"
+# ((column, width) of row 2's duration/cost field, or None).
+def _ex_stretch(sp, phase, n, geo, sit):
+    ends = n >= 3 and (phase == 0 or (n >= 5 and phase == n - 1))
+    s = sp["half" if ends else "wide"]
+    return _put(s, min(geo["home"], _corner_x(s, geo)), geo)
+
+
+def _ex_peek(sp, phase, n, geo, sit):
+    f, home = (phase + 0.5) / n, sp["home"]
+    xc = _corner_x(home, geo)
+    if f < 0.25:
+        return _put(home, _lerp(geo["home"], xc, f / 0.25), geo)
+    if f < 0.4:
+        return []  # behind the corner
+    if f < 0.85:
+        return _put(sp["peek"], _corner_x(sp["peek"], geo), geo)
+    return _put(home, _lerp(xc, geo["back"], (f - 0.85) / 0.15), geo)
+
+
+def _ex_crawl(sp, phase, n, geo, sit):
+    f, s = (phase + 0.5) / n, sp["crawl"]
+    if f < 0.4:
+        return _put(s, _lerp(geo["home"], 2, f / 0.4), geo)
+    if f < 0.6:
+        return _put(s, 2, geo)  # at the far end, by the lead
+    return _put(s, _lerp(2, geo["back"], (f - 0.6) / 0.4), geo)
+
+
+def _ex_downstairs(sp, phase, n, geo, sit):
+    f, home, down = (phase + 0.5) / n, sp["home"], sp["down"]
+    xc, xd = _corner_x(home, geo), _corner_x(down, geo)
+    if f < 0.15:
+        return _put(home, _lerp(geo["home"], xc, f / 0.15), geo)
+    if f >= 0.85:
+        return _put(home, _lerp(xc, geo["back"], (f - 0.85) / 0.15), geo)
+    if f < 0.25:
+        return _put(down, xd, geo)
+    if sit and geo["seat"]:
+        col, w = geo["seat"]
+        seat = col + (w - down["w"]) // 2
+        if f < 0.45:
+            return _put(down, _lerp(xd, seat, (f - 0.25) / 0.2), geo)
+        if f < 0.7:
+            return _put(down, seat, geo)
+        return _put(down, _lerp(seat, xd, (f - 0.7) / 0.15), geo)
+    far = min(max(geo["rule2"], 2), xd)  # the left end of row 2's free rule
+    if f < 0.55:
+        return _put(down, _lerp(xd, far, (f - 0.25) / 0.3), geo)
+    return _put(down, _lerp(far, xd, (f - 0.55) / 0.3), geo)
+
+
+def _ex_hang(sp, phase, n, geo, sit):
+    f, home, hang = (phase + 0.5) / n, sp["home"], sp["hang"]
+    xc = _corner_x(home, geo)
+    if f < 0.2:
+        return _put(home, _lerp(geo["home"], xc, f / 0.2), geo)
+    if f < 0.85:
+        return _put(hang, _corner_x(hang, geo) - phase % 2, geo)  # it swings
+    return _put(home, _lerp(xc, geo["back"], (f - 0.85) / 0.15), geo)
+
+
+EXCURSIONS = {"stretch": _ex_stretch, "peek": _ex_peek, "crawl": _ex_crawl,
+              "downstairs": _ex_downstairs, "hang": _ex_hang}
+
+
+def _seat(row2):
+    """(column, width) of row 2's duration/cost field ("$…" or "T:…"), or
+    None."""
+    texts = [t for _, t in split_cells(row2)[0]]
+    plain = "".join(t or "\0" for t in texts)
+    m = re.search(r"\$\d[\d.]*|T:\d\S*", plain)
+    return (m.start(), m.end() - m.start()) if m else None
+
+
+def excursion_rows(size, row1, row2, cols, frame_on, alien_pct, now, pres, look):
+    """(row 1, row 2) with the creature out on an excursion, or None when
+    none is on: excursions off (RETRO_HUD_EXCURSIONS=0), size not tiny or
+    big, no creature (frame or alien off, a short rule), a mood other than
+    calm, idle or yours, or a bubble or icon to show (it stays home while
+    it has something to say). The rows are the plain frame with the
+    creature laid over their cells; nothing moves."""
+    if os.environ.get("RETRO_HUD_EXCURSIONS", "1").strip() == "0" or \
+            size not in ("tiny", "big") or not frame_on or alien_pct is None:
+        return None
+    mood, mood_since, icon, bubble = _creature_mood(alien_pct, pres)
+    mood = mood if mood in CREATURE_SPEEDS else "calm"
+    if mood not in EXCURSION_MOODS or icon or bubble:
+        return None
+    tl = tick_s()
+    ex = excursion_at(look["seed"], now, tl)
+    if ex is None:
+        return None
+    if size == "tiny":
+        start, track = vislen(row1) + 1, cols - vislen(row1) - 2
+        if track < TINY_MIN_TRACK:
+            return None
+        def at(t):
+            return tiny_pose(look["seed"], mood, mood_since, t, track, look["family"],
+                             look["color"], "", tl)
+    else:
+        start = max(vislen(row1), vislen(row2)) + 1
+        track = cols - 1 - start
+        if track < CREATURE_MIN_TRACK:
+            return None
+        def at(t):
+            return pose(look["seed"], mood, mood_since, t, track, look["family"],
+                        look["color"], "", tl)
+    sp = _sprites(size, at(now))
+    if None in sp.values():
+        return None
+    left = (int(now) // tl - ex["phase"]) * tl  # its first frame
+    rows = [_frame(row1, cols, "┐", True), _frame(row2, cols, "┘", True)]
+    geo = {"cols": cols, "rule2": vislen(row2) + 1, "seat": _seat(rows[1]),
+           "home": start + at(left)["pos"] + sp["home"]["off"],
+           "back": start + at(left + ex["n"] * tl)["pos"] + sp["home"]["off"]}
+    for r, col, cells in EXCURSIONS[ex["kind"]](sp, ex["phase"], ex["n"], geo, ex["sit"]):
+        rows[r] = overlay(rows[r], col, cells)
+    return rows[0], rows[1]
 
 
 # ── row assembly ──
@@ -2218,6 +2425,14 @@ def render(data, cols, now):
         except Exception:  # decoration again: a blank head line, a plain rule
             head, top = R, _frame(row1, cols, "┐", frame_on)
         return [head, top, _frame(row2, cols, "┘", frame_on)]
+    if size in ("tiny", "big"):
+        try:
+            out = excursion_rows(size, row1, row2, cols, frame_on, alien_pct, now, pres,
+                                 creature_look(data, pres))
+        except Exception:  # decoration: the creature stays home
+            out = None
+        if out:
+            return list(out)
     if size == "big":
         try:
             return list(_frame_big(row1, row2, cols, frame_on, alien_pct, now, pres,
