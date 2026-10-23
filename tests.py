@@ -3806,6 +3806,55 @@ class TestCompositor(unittest.TestCase):
         self.assertEqual((out[:2], out[-1]), ("└─", "┘"))
 
 
+class TestExcursionSchedule(unittest.TestCase):
+    """One excursion per 10-minute bucket, 5–15 min apart, 4–20 s long,
+    deterministic from (seed, time)."""
+
+    def plans(self, seed, count=200):
+        return [sl.excursion_plan(seed, NOW // 600 + b) for b in range(count)]
+
+    def test_cadence_and_length(self):
+        kinds = set()
+        for seed in (0, 1, 7, 123456789):
+            plans = self.plans(seed)
+            starts = [p["start"] for p in plans]
+            gaps = [b - a for a, b in zip(starts, starts[1:])]
+            self.assertGreaterEqual(min(gaps), 5 * 60, seed)
+            self.assertLessEqual(max(gaps), 15 * 60, seed)
+            for p in plans:
+                self.assertTrue(4 <= p["dur"] <= 20, p)
+                self.assertEqual(p["start"] // 600, (p["start"] + p["dur"]) // 600, p)
+                kinds.add(p["kind"])
+            self.assertEqual(plans, self.plans(seed))
+        self.assertEqual(kinds, set(sl.EXCURSION_KINDS))
+        self.assertEqual(set(sl.EXCURSION_KINDS),
+                         {"stretch", "peek", "crawl", "downstairs", "hang"})
+
+    def test_active_exactly_during_the_excursion(self):
+        p = sl.excursion_plan(3, NOW // 600)
+        on = [t for t in range(NOW, NOW + 600) if sl.excursion_at(3, t)]
+        self.assertEqual(on, list(range(p["start"], p["start"] + p["dur"])))
+        for t in on:
+            ex = sl.excursion_at(3, t)
+            self.assertEqual((ex["kind"], ex["phase"], ex["n"]),
+                             (p["kind"], t - p["start"], p["dur"]))
+
+    def test_a_long_tick_still_shows_every_excursion(self):
+        for tick_len in (2, 5, 7, 10):
+            for b in range(40):
+                p = sl.excursion_plan(9, NOW // 600 + b)
+                seen = [sl.excursion_at(9, t, tick_len)
+                        for t in range(p["start"] - 30, p["start"] + 60)]
+                seen = [ex for ex in seen if ex]
+                self.assertTrue(seen, (tick_len, b))
+                self.assertTrue(all(ex["kind"] == p["kind"] for ex in seen))
+                # one frame per tick: every second of a tick agrees
+                for t in range(p["start"] - 30, p["start"] + 60):
+                    base = t - t % tick_len
+                    self.assertEqual(sl.excursion_at(9, t, tick_len),
+                                     sl.excursion_at(9, base, tick_len))
+
+
 class TestCreatureCLI(unittest.TestCase):
     SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
 

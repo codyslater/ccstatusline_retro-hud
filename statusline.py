@@ -1632,6 +1632,43 @@ def render_box(p, rule_top=False):
     return "".join(lines[0]), "".join(lines[1])
 
 
+# ── excursions: now and then the creature explores the rest of the bar ──
+EXCURSION_KINDS = ("stretch", "peek", "crawl", "downstairs", "hang")
+EXCURSION_S = {"stretch": (4, 5), "peek": (6, 12), "crawl": (10, 20),
+               "downstairs": (12, 20), "hang": (6, 12)}  # seconds, low–high
+EXCURSION_BUCKET_S = 600  # one excursion per 10 minutes …
+EXCURSION_OFFSET = (150, 450)  # … starting this far in: 5–15 min apart
+EXCURSION_MOODS = ("calm", "idle", "yours")
+
+
+def excursion_plan(seed, bucket):
+    """The excursion of 10-minute bucket `bucket`: {"kind", "start" (epoch
+    seconds), "dur" (seconds), "sit" (downstairs sits on the cost field)},
+    from (seed, bucket) alone."""
+    rand = _mulberry32((int(seed) ^ (int(bucket) * 0x9E3779B1) ^ 0xE5C) & _M32)
+    lo, hi = EXCURSION_OFFSET
+    start = int(bucket) * EXCURSION_BUCKET_S + lo + int(rand() * (hi - lo))
+    kind = EXCURSION_KINDS[int(rand() * len(EXCURSION_KINDS))]
+    a, b = EXCURSION_S[kind]
+    return {"kind": kind, "start": start, "dur": a + int(rand() * (b - a + 1)),
+            "sit": rand() < 0.5}
+
+
+def excursion_at(seed, now, tick_len=1):
+    """The excursion on at `now`, or None: excursion_plan plus "phase" (its
+    frame, 0 …) and "n" (its length in frames, at least 1). Frames are
+    ticks of `tick_len` seconds, the first one the first tick to start
+    inside it, so a long tick still shows every excursion."""
+    tl = max(int(tick_len), 1)
+    tick = int(now) // tl
+    plan = excursion_plan(seed, tick * tl // EXCURSION_BUCKET_S)
+    first = -(-plan["start"] // tl)
+    n = max(plan["dur"] // tl, 1)
+    if not first <= tick < first + n:
+        return None
+    return dict(plan, phase=tick - first, n=n)
+
+
 # ── row assembly ──
 def _join(prefix, segs):
     return prefix + SEP.join(s for s in segs if s)
