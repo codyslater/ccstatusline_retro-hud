@@ -1419,6 +1419,33 @@ class TestAgentEndToEnd(ShellHarness):
             os.environ["RETRO_HUD_CREATURE"] = "0"
             os.environ.pop("RETRO_HUD_CREATURE_SEED", None)
 
+class TestHooksOnlyInstall(ShellHarness):
+    def test_hooks_only_leaves_statusline_and_settings_statusline_alone(self):
+        home = self.home
+        claude = os.path.join(home, ".claude")
+        os.makedirs(claude, exist_ok=True)
+        with open(os.path.join(claude, "statusline.py"), "w") as f:
+            f.write("# local edits\n")
+        with open(os.path.join(claude, "statusline-command.sh"), "w") as f:
+            f.write("#!/bin/bash\n# local wrapper\n")
+        settings = os.path.join(claude, "settings.json")
+        with open(settings, "w") as f:
+            json.dump({"statusLine": {"type": "command", "command": "x", "refreshInterval": 1},
+                       "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "keep"}]}]}}, f)
+        p = subprocess.run(["bash", os.path.join(REPO, "install.sh"), "--hooks-only"],
+                           env=self.env(), capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(open(os.path.join(claude, "statusline.py")).read(), "# local edits\n")
+        self.assertIn("local wrapper", open(os.path.join(claude, "statusline-command.sh")).read())
+        data = json.load(open(settings))
+        self.assertEqual(data["statusLine"]["refreshInterval"], 1)
+        self.assertEqual(data["statusLine"]["command"], "x")
+        self.assertIn("Stop", data["hooks"])
+        self.assertEqual(data["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "keep")
+        self.assertTrue(os.path.exists(os.path.join(claude, "presence-hook.sh")))
+        self.assertNotIn("Installed retro-hud", p.stdout)
+
+
 class TestHandlerInstall(ShellHarness):
     DESKTOP = os.path.join(".local", "share", "applications", "retro-hud-url-handler.desktop")
 

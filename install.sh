@@ -10,11 +10,12 @@ SETTINGS="$CLAUDE_DIR/settings.json"
 # --handler       also install the retro-hud:// reference handler
 # --handler-only  install just the handler; leave the statusline alone
 # Other arguments are ignored here.
-WANT_HANDLER=0 HANDLER_ONLY=0
+WANT_HANDLER=0 HANDLER_ONLY=0 HOOKS_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         --handler) WANT_HANDLER=1 ;;
         --handler-only) WANT_HANDLER=1 HANDLER_ONLY=1 ;;
+        --hooks-only) HOOKS_ONLY=1 ;;
     esac
 done
 
@@ -94,9 +95,15 @@ fi
 
 mkdir -p "$CLAUDE_DIR"
 
-cp "$SCRIPT_DIR/statusline.py" "$CLAUDE_DIR/statusline.py"
-cp "$SCRIPT_DIR/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh"
-chmod +x "$CLAUDE_DIR/statusline-command.sh"
+# --hooks-only: register the presence hooks and touch nothing else — for an
+# install whose statusline.py or statusline-command.sh carries local changes
+# that a plain copy would overwrite.
+if [ "$HOOKS_ONLY" = 1 ]; then
+    set -- --hooks
+else
+    cp "$SCRIPT_DIR/statusline.py" "$CLAUDE_DIR/statusline.py"
+    cp "$SCRIPT_DIR/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh"
+    chmod +x "$CLAUDE_DIR/statusline-command.sh"
 
 if [ -f "$SETTINGS" ]; then
     BACKUP="$SETTINGS.bak.$(date +%Y%m%d%H%M%S)"
@@ -136,6 +143,7 @@ fi
 
 echo "Installed $(python3 "$CLAUDE_DIR/statusline.py" --version). Restart Claude Code to activate."
 echo "Preview it any time with: python3 $CLAUDE_DIR/statusline.py --demo"
+fi  # not --hooks-only
 
 # ── agent presence hooks (--hooks) ─────────────────────────────────────
 # Optional: register presence-hook.sh for Stop, UserPromptSubmit and the

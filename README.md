@@ -23,6 +23,7 @@ git clone https://github.com/codyslater/ccstatusline_retro-hud.git
 cd ccstatusline_retro-hud
 bash install.sh     # backs up settings.json before touching it
 # or: bash install.sh --hooks   (also lets the creature see permission prompts)
+# existing install with local edits: bash install.sh --hooks-only (touches only the hooks)
 ```
 
 Restart Claude Code. Preview any time without it:

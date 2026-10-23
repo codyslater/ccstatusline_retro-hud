@@ -6,6 +6,12 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
 ## [v3.0.0] — 2026-10-22
 
+### Fixed
+- `install.sh --hooks-only` registers the presence hooks and touches nothing
+  else, for an install whose `statusline.py` or `statusline-command.sh`
+  carries local edits (a plain install, `--hooks` or `--handler` included,
+  copies both files and resets `statusLine.refreshInterval`).
+
 ### Changed (breaking)
 - **The HUD is three lines by default.** A head line above the frame
   carries the new pixel creature's upper half and its bubble; rows 1
