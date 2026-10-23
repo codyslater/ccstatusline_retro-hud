@@ -94,7 +94,7 @@ tool sends it a message; `RETRO_HUD_BUBBLES=all` adds the narration
 | Value | Creature | HUD |
 |-------|----------|-----|
 | `tiny` (default) | braille dots (2×4 per text cell), a 10×4-dot body in a 7-cell box on the top rule | two lines |
-| `big` | half blocks (`▀` `▄`, two pixel rows per cell), a 9×4-pixel body straddling rows 1 and 2 at the right end of the rule | two lines |
+| `big` | half blocks (`▀` `▄`, two pixel rows per cell), a 9×4-pixel body straddling rows 1 and 2 on the stretch of rule they share | two lines |
 | `tall` | the same half-block body with its upper half on a head line printed above the frame | three lines |
 | `0` | the 2.x text-art alien (`/o.o\`) and its sprite sets, byte for byte | two lines |
 
