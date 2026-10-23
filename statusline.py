@@ -29,6 +29,11 @@ Env toggles:
                                  0: skip the folder emoji entirely
     RETRO_HUD_HOME_URL=<url>     end row 2 with a ⌂ jump-home link (OSC 8) to
                                  any URL your desktop can open; never dropped
+    RETRO_HUD_ACTIONS=1          click actions: model, effort, context, cost
+                                 and lines become retro-hud:// links (inside
+                                 tmux only); the rate-limit gauges link to
+                                 retro-hud://usage everywhere. Needs a
+                                 handler for the scheme (install.sh --handler)
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
@@ -47,6 +52,7 @@ import shutil
 import sys
 import time
 import unicodedata
+from urllib.parse import quote
 
 # ── HIGH CONTRAST sci-fi palette ──
 R = "\033[0m"
@@ -181,6 +187,48 @@ def link(url, text):
     if url:
         return "\033]8;;{}\a{}\033]8;;\a".format(url, text)
     return text
+
+
+# ── click actions (RETRO_HUD_ACTIONS=1) ──
+_PANE_RE = re.compile(r"%[0-9]+\Z")
+
+
+def action_query(cwd):
+    """Query for retro-hud://<action> links: pane, cwd and, when the
+    statusline runs under a non-default tmux server, its socket.
+
+    Empty when $TMUX_PANE is missing or malformed — we are not inside
+    tmux, so nothing can be typed into this session.
+    """
+    pane = os.environ.get("TMUX_PANE", "")
+    if not _PANE_RE.match(pane):
+        return ""
+    q = "pane={}&cwd={}".format(quote(pane, safe=""), quote(cwd, safe="/"))
+    sock = os.environ.get("TMUX", "").split(",")[0]
+    if sock:
+        q += "&sock=" + quote(sock, safe="/")
+    return q
+
+
+def make_action(cwd):
+    """Return action(name, text, extra="") for this render.
+
+    Off (the default) it returns text untouched, so the output is
+    byte-identical to a HUD without click actions. On, `usage` always
+    links (it only opens a web page); every other action links only
+    inside tmux.
+    """
+    if os.environ.get("RETRO_HUD_ACTIONS") != "1":
+        return lambda name, text, extra="": text
+    query = action_query(cwd)
+
+    def action(name, text, extra=""):
+        if name == "usage":
+            return link("retro-hud://usage" + ("?" + query if query else ""), text)
+        if not query:
+            return text
+        return link("retro-hud://{}?{}{}".format(name, query, extra), text)
+    return action
 
 
 # ── git via file reads (no subprocess, no PATH dependency) ──
@@ -437,6 +485,7 @@ def render(data, cols, now):
     branch = str(data.get("_branch_override") or "") or git_branch(cwd)
     gh_url = repo_url(data, cwd, branch) if branch else ""
     dir_name = os.path.basename(cwd.rstrip(os.sep)) or cwd
+    action = make_action(cwd)
 
     # ── gauge widths scale with the terminal ──
     ctx_len = clamp(cols // 20, 4, 10)
@@ -453,9 +502,10 @@ def render(data, cols, now):
 
     # ═══ ROW 1 ═══
     def model_seg(name):
-        inner = MODEL_TXT + name + R
+        inner = MODEL_TXT + action("model", name) + R
         if effort in EFFORT_GLYPHS:
-            inner += " " + EFFORT_COLORS[effort] + EFFORT_GLYPHS[effort] + R
+            inner += " " + EFFORT_COLORS[effort] + action(
+                "effort", EFFORT_GLYPHS[effort], "&cur=" + effort) + R
         if thinking:
             inner += " " + NEON_CYAN + "✧" + R
         return "{}[{} {} {}]{}".format(MODEL_BOX, R, inner, MODEL_BOX, R)
@@ -523,7 +573,8 @@ def render(data, cols, now):
                 (ctx_tok_mode == "auto" and clamp(ctx_pct, 0, 999) < WARN_PCT):
             tok_mode = 0
         c = value_color(clamp(ctx_pct, 0, 100))
-        s = "{} {}{}%{}".format(ctx_gauge(ctx_pct, ctx_len), c, clamp(ctx_pct, 0, 999), R)
+        s = action("ctx", "{} {}{}%{}".format(
+            ctx_gauge(ctx_pct, ctx_len), c, clamp(ctx_pct, 0, 999), R))
         if tok_mode and ctx_tok:
             t = fmt_tok(ctx_tok)
             if tok_mode == 2 and win_size:
@@ -563,12 +614,12 @@ def render(data, cols, now):
     def rl_seg(rich):
         l5, flex5 = rl_label(rl5_pct, rl5_left, rl5_reset, rich, mirror=True)
         l7, flex7 = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
-        return rate_mirror(rl5_pct, rl7_pct, rl_len + flex5, rl_len + flex7,
-                           l5, l7)
+        return action("usage", rate_mirror(rl5_pct, rl7_pct, rl_len + flex5,
+                                           rl_len + flex7, l5, l7))
 
     def lines_seg():
-        return "{}+{}{}{}/{}{}-{}{}".format(
-            NEON_GREEN, lines_add, R, DIM, R, NEON_RED, lines_del, R)
+        return action("diff", "{}+{}{}{}/{}{}-{}{}".format(
+            NEON_GREEN, lines_add, R, DIM, R, NEON_RED, lines_del, R))
 
     def cache_seg():
         pct = cache_read * 100 // cache_denom
@@ -604,7 +655,8 @@ def render(data, cols, now):
             segs.append(cache_seg())
         if show_dur:
             segs.append(NEON_PINK + "T:" + dur_str + R)
-        segs.append(NEON_YEL + ("${:.2f}".format(cost) if cost < 100 else "${:.0f}".format(cost)) + R)
+        segs.append(NEON_YEL + action("cost", "${:.2f}".format(cost) if cost < 100
+                                      else "${:.0f}".format(cost)) + R)
         if show_agent:
             segs.append(agent_seg())
         segs.append(home_seg)

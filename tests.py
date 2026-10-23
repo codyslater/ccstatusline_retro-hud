@@ -10,6 +10,10 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import statusline as sl
 
+# Click actions are opt-in; a developer's own shell may export the toggle
+# (and usually runs inside tmux), so every test starts from "off".
+os.environ.pop("RETRO_HUD_ACTIONS", None)
+
 NOW = 1_800_000_000
 
 FULL = {
@@ -378,6 +382,151 @@ class TestHomeLink(unittest.TestCase):
         row = sl.render(copy.deepcopy(MINIMAL), 160, NOW)[1]
         self.assertIn("\x1b]8;;x://a[31mbc\a⌂", row)
         self.assertNotIn("\n", row)
+
+
+class TestClickActionLinks(unittest.TestCase):
+    """RETRO_HUD_ACTIONS=1 wraps segments in retro-hud:// OSC 8 links."""
+    # sha256 of "\n".join(render(payload, cols, NOW)) as rendered by v2.7.0.
+    # With actions off the output must stay byte-identical, even in tmux.
+    GOLDEN = {
+        "FULL": {
+            60: "cc59a504bdf88a19651e861bf4c70a2c8998ce4c4283268444291d3bb3dcec64",
+            100: "9e54e4c8ea31cdd2be077a306755e33fff053e9d5183b59a1ed101a46bc12682",
+            160: "4b35578c5f291ba954f0aa8c233feb9cd322c7f8074649f30ae8314612e37573",
+            220: "03b04902deb4e7809295836b812780ce0b7b51a458627e2af4edb088b2f00622"},
+        "MINIMAL": {
+            60: "5671daa0bac893ad6805e3705e3025795fe35ef547c2c52b1a84a6bf8a5726ee",
+            100: "3818f0574300890d7bc522751e1a0a0089b4b5e77980d22a76efd5bb65cca6e2",
+            160: "816b8ff61d4286f678970bae77a9893b1b0e334dd1f9e9e69ab7e63aafbdcc8e",
+            220: "ccb305097189923e0078fcba5918b534e5846d89295a937e5b04420a604ab989"},
+        "OVERLOAD": {
+            60: "5ed1fb4dc5b73ab081fd1b68aa5e57634a0610edbb93c9527664625c23e10ddf",
+            100: "83362b5e8c99343deb6decb4ba56a2e49c79250f45cbb1a77aa3a3a4b56a3ca4",
+            160: "98be41c46e09ad289439cbe37776d718a9fb93e620d70ee6d4e24d5f4759ba44",
+            220: "e8845c761adb2e5500a400a976366ef11baaae59ec0b3e2d7751e0c1051c8b75"},
+    }
+    KEYS = ("RETRO_HUD_ACTIONS", "TMUX_PANE", "TMUX", "RETRO_HUD_HOME_URL")
+    Q = ("pane=%257&cwd=/home/u/projects/some-long-project-name"
+         "&sock=/tmp/tmux-1000/default")
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in self.KEYS}
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+    def tmux_env(self):
+        os.environ["TMUX_PANE"] = "%7"
+        os.environ["TMUX"] = "/tmp/tmux-1000/default,4242,0"
+
+    def digest(self, payload, cols):
+        import hashlib
+        rows = sl.render(copy.deepcopy(payload), cols, NOW)
+        return hashlib.sha256("\n".join(rows).encode()).hexdigest()
+
+    def check_golden(self):
+        for name, table in self.GOLDEN.items():
+            for cols, want in table.items():
+                self.assertEqual(self.digest(globals()[name], cols), want,
+                                 "{} cols={}".format(name, cols))
+
+    def test_off_is_byte_identical_to_2_7_0(self):
+        self.check_golden()
+
+    def test_off_inside_tmux_is_byte_identical(self):
+        self.tmux_env()
+        self.check_golden()
+        for val in ("0", "", "yes", "true"):
+            os.environ["RETRO_HUD_ACTIONS"] = val
+            self.check_golden()
+
+    def links(self, payload=FULL, cols=220):
+        rows = sl.render(copy.deepcopy(payload), cols, NOW)
+        found = {}
+        for i, row in enumerate(rows):
+            for url, text in re.findall(
+                    r"\x1b\]8;;(retro-hud://[^\x07]*)\x07(.*?)\x1b\]8;;\x07", row):
+                name = url.split("?")[0][len("retro-hud://"):]
+                found.setdefault(name, []).append((i, url, sl.strip_ansi(text)))
+        return found
+
+    def test_segments_carry_links_inside_tmux(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        self.tmux_env()
+        found = self.links()
+        self.assertEqual(found["model"], [(0, "retro-hud://model?" + self.Q, "Fable 5")])
+        self.assertEqual(found["effort"],
+                         [(0, "retro-hud://effort?" + self.Q + "&cur=high", "●")])
+        (row, url, text), = found["ctx"]
+        self.assertEqual((row, url), (1, "retro-hud://ctx?" + self.Q))
+        self.assertTrue(text.endswith("72%"), text)
+        self.assertEqual(found["cost"], [(1, "retro-hud://cost?" + self.Q, "$3.21")])
+        self.assertEqual(found["diff"], [(1, "retro-hud://diff?" + self.Q, "+128/-37")])
+        (row, url, text), = found["usage"]
+        self.assertEqual((row, url), (1, "retro-hud://usage?" + self.Q))
+        self.assertIn("63%", text)
+        self.assertIn("81% · 3d", text)
+        self.assertEqual(set(found), {"model", "effort", "ctx", "cost", "diff", "usage"})
+
+    def test_branch_and_pr_keep_their_web_links(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        self.tmux_env()
+        row = sl.render(copy.deepcopy(FULL), 220, NOW)[0]
+        self.assertIn("\x1b]8;;https://github.com/u/p/pull/42\a#42✓", row)
+        payload = copy.deepcopy(FULL)
+        payload["_branch_override"] = "main"
+        row = sl.render(payload, 220, NOW)[0]
+        self.assertIn("\x1b]8;;https://github.com/u/p/tree/main\amain", row)
+
+    def test_outside_tmux_only_usage_links(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        found = self.links()
+        self.assertEqual(set(found), {"usage"})
+        self.assertEqual(found["usage"][0][1], "retro-hud://usage")
+
+    def test_malformed_pane_counts_as_outside_tmux(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        for pane in ("%7;x", "7", "%", "%7 ", ""):
+            os.environ["TMUX_PANE"] = pane
+            self.assertEqual(set(self.links()), {"usage"}, repr(pane))
+
+    def test_no_sock_without_tmux_var(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        os.environ["TMUX_PANE"] = "%12"
+        url = self.links()["cost"][0][1]
+        self.assertEqual(
+            url, "retro-hud://cost?pane=%2512&cwd=/home/u/projects/some-long-project-name")
+
+    def test_cwd_is_percent_encoded(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        os.environ["TMUX_PANE"] = "%1"
+        payload = copy.deepcopy(MINIMAL)
+        payload["workspace"]["current_dir"] = "/tmp/a b&c=d#e?f%gé"
+        url = self.links(payload)["ctx"][0][1]
+        self.assertEqual(
+            url, "retro-hud://ctx?pane=%251&cwd=/tmp/a%20b%26c%3Dd%23e%3Ff%25g%C3%A9")
+        # the reference handler's whitelist accepts every URL the HUD emits
+        self.assertRegex(url, r"^retro-hud://ctx\?[A-Za-z0-9_=&%.:/~+-]*$")
+
+    def test_effort_link_omits_unknown_level(self):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        os.environ["TMUX_PANE"] = "%1"
+        payload = copy.deepcopy(FULL)
+        payload["effort"]["level"] = "turbo"
+        self.assertNotIn("effort", self.links(payload))
+
+    def test_links_never_change_the_visible_rows(self):
+        self.tmux_env()
+        for payload in (FULL, MINIMAL, OVERLOAD, {}):
+            for cols in range(50, 241, 10):
+                os.environ["RETRO_HUD_ACTIONS"] = "0"
+                plain = [sl.strip_ansi(r) for r in sl.render(copy.deepcopy(payload), cols, NOW)]
+                os.environ["RETRO_HUD_ACTIONS"] = "1"
+                linked = [sl.strip_ansi(r) for r in sl.render(copy.deepcopy(payload), cols, NOW)]
+                self.assertEqual(plain, linked, "cols={}".format(cols))
 
 
 class TestHelpers(unittest.TestCase):
