@@ -3578,6 +3578,95 @@ class TestTinyFrame(CreatureCase):
         self.assertEqual(len(set(five)), 1)              # one frame per 5 s
 
 
+class TestBigFrame(CreatureCase):
+    """big: the half-block creature straddles rows 1 and 2, no head line."""
+    ROW1 = sl.NEON_GREEN + "┌─" + sl.R + "x" * 20
+    LOOK = {"seed": 11, "family": "alien", "color": None}
+
+    def test_box_straddles_the_rows_and_nothing_else_moves(self):
+        for n2 in (10, 30):
+            row2 = sl.NEON_GREEN + "└─" + sl.R + "y" * n2
+            for mood in MOODS_ALL:
+                for bubble in ("", "ready", "日本語のふきだし"):
+                    for icon in ("", "!"):
+                        for cols in range(41, 200, 11):
+                            for now in (NOW, NOW + 1, NOW + 170):
+                                pres = {"mood": mood, "bubble": bubble, "since": now - 7,
+                                        "mood_since": now - 7, "icon": icon}
+                                r1, r2 = sl._frame_big(self.ROW1, row2, cols, True, 50, now,
+                                                       pres, self.LOOK)
+                                b1 = sl._frame(self.ROW1, cols, "┐", True)
+                                b2 = sl._frame(row2, cols, "┘", True)
+                                label = (n2, mood, bubble, cols, now)
+                                self.assertEqual(sl.vislen(r1), cols, label)
+                                self.assertEqual(sl.vislen(r2), cols, label)
+                                start = max(sl.vislen(self.ROW1), sl.vislen(row2)) + 1
+                                track = cols - 1 - start
+                                if track < 17:
+                                    self.assertEqual((r1, r2), (b1, b2), label)
+                                    continue
+                                p = sl.pose(11, mood, now - 7, now, track, "alien", None, icon)
+                                top, bottom = sl.render_box(p, rule_top=True)
+                                col = start + p["pos"]
+                                c1, c2 = _cells(sl.strip_ansi(r1)), _cells(sl.strip_ansi(r2))
+                                k1, k2 = _cells(sl.strip_ansi(b1)), _cells(sl.strip_ansi(b2))
+                                self.assertEqual(c1[col:col + 13], _cells(sl.strip_ansi(top)), label)
+                                self.assertEqual(c2[col:col + 13], _cells(sl.strip_ansi(bottom)),
+                                                 label)
+                                # row 2 outside the box is the bare row, byte for byte
+                                self.assertEqual(c2[:col] + c2[col + 13:], k2[:col] + k2[col + 13:],
+                                                 label)
+                                r0 = sl.vislen(self.ROW1) + 1  # row 1 up to its rule
+                                self.assertEqual(c1[:r0], k1[:r0], label)
+                                self.assertEqual((c1[-1], c2[-1]), ("┐", "┘"), label)
+                                if bubble:
+                                    self.assertNotIn(bubble[:2], sl.strip_ansi(r2), label)
+
+    def test_bubble_on_row_1_beside_the_head(self):
+        row2 = sl.NEON_GREEN + "└─" + sl.R + "y" * 10
+        pres = {"mood": "yours", "bubble": "ready", "since": NOW, "mood_since": None}
+        r1, r2 = sl._frame_big(self.ROW1, row2, 120, True, 50, NOW, pres, self.LOOK)
+        self.assertIn("ready", sl.strip_ansi(r1))
+        self.assertNotIn("ready", sl.strip_ansi(r2))
+
+    def test_short_shared_rule_hides_it(self):
+        row2 = sl.NEON_GREEN + "└─" + sl.R + "y" * 101
+        r1, r2 = sl._frame_big(self.ROW1, row2, 120, True, 50, NOW, None, self.LOOK)
+        self.assertEqual(r1, sl._frame(self.ROW1, 120, "┐", True))
+        self.assertEqual(r2, sl._frame(row2, 120, "┘", True))
+
+    def test_the_box_is_linked_on_both_rows(self):
+        action = lambda name, text, extra="": sl.link("retro-hud://" + name, text)
+        row2 = sl.NEON_GREEN + "└─" + sl.R + "y" * 10
+        pres = {"mood": "working", "bubble": "ready", "since": NOW, "mood_since": None}
+        r1, r2 = sl._frame_big(self.ROW1, row2, 120, True, 50, NOW, pres, self.LOOK, action)
+        self.assertEqual((r1.count("retro-hud://agent"), r2.count("retro-hud://agent")), (1, 1))
+        self.assertNotIn("ready\a", r1)
+
+    def test_hud_big_is_two_lines_and_row_2_keeps_its_segments(self):
+        os.environ["RETRO_HUD_CREATURE"] = "big"
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        seen = False
+        for cols in range(50, 241, 10):
+            for t in (NOW, NOW + 1, NOW + 30):
+                on = sl.render(self.payload(FULL), cols, t)
+                os.environ["RETRO_HUD_CREATURE"] = "0"
+                off = sl.render(self.payload(FULL), cols, t)
+                os.environ["RETRO_HUD_CREATURE"] = "big"
+                self.assertEqual(len(on), 2)
+                for a, b in zip(on, off):
+                    self.assertEqual(sl.vislen(a), sl.vislen(b), cols)
+                    self.assertEqual(sl.strip_ansi(a)[-1], sl.strip_ansi(b)[-1])
+                p_on, p_off = sl.strip_ansi(on[1]), sl.strip_ansi(off[1])
+                m = re.search("[▀▄x]", p_on)
+                if m:
+                    seen = True
+                    self.assertEqual(p_on[:m.start()], p_off[:m.start()], cols)
+                else:
+                    self.assertEqual(on[1], off[1], cols)
+        self.assertTrue(seen)
+
+
 class TestCreatureCLI(unittest.TestCase):
     SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
 
