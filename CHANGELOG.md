@@ -4,6 +4,38 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## Unreleased
+
+### Added
+- **Click actions** (`RETRO_HUD_ACTIONS=1`, off by default). Inside tmux
+  the model name, effort dot, context gauge, `$` cost and `+N/-M` lines
+  become `retro-hud://` links, and the rate-limit gauges link to
+  `retro-hud://usage` everywhere. With the reference handler a click pops
+  a tmux menu and types the pick into that session's composer: `/model`,
+  `/effort`, `/compact` · `/context` · `/clear` (behind a confirm menu),
+  `/cost`; the lines open a read-only `git diff` popup and the gauges
+  open your usage page. Off, or with any other value, the output is
+  byte-identical to v2.7.0.
+- URL contract `retro-hud://<action>?pane=<id>[&sock=<socket>]` (plus
+  `cur=<level>` on `effort`), documented in the README so you can write
+  your own handler. Links never carry a directory.
+- `handler/retro-hud-handler.sh`, the reference handler (bash, Linux,
+  tmux): strict URL whitelist and value validation; acts only on the
+  clicking client's active pane while it runs `claude`; types with
+  `send-keys -l`; menu items re-enter the handler with validated tokens
+  only; the diff runs in the pane's own directory (from tmux) with git's
+  config-driven programs disabled and `less` in secure mode; rejected
+  clicks are logged to `~/.cache/retro-hud/handler.log`. Settings
+  (`RETRO_HUD_MODELS`, `RETRO_HUD_USAGE_URL`) come from the environment
+  or `~/.config/retro-hud/env`, read line by line and never sourced. An
+  optional `~/.claude/retro-hud-handler.local.sh` is sourced first for
+  your own actions.
+- `install.sh --handler` / `--handler-only`: install the handler, create
+  the settings file with commented defaults, and register the scheme via
+  `xdg-mime` only when nothing owns it yet (otherwise report the owner).
+  `uninstall.sh` removes the handler and, if it wrote it, the
+  registration; your settings file is kept.
+
 ## [v2.7.0] — 2026-10-22
 
 ### Added

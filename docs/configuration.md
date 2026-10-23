@@ -15,6 +15,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_WIDTH` | — | hard width override when `$COLUMNS` is wrong |
 | `RETRO_HUD_EMOJI` | `2` | `1`: count emoji as one cell; `0`: skip the folder emoji |
 | `RETRO_HUD_HOME_URL` | — | end row 2 with a hyperlinked `⌂`: a jump-home link for multi-session setups. Point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions. Unset or empty: no glyph |
+| `RETRO_HUD_ACTIONS` | — | `1` turns on [click actions](../README.md#click-actions): model, effort, context gauge, cost and lines link to `retro-hud://…` inside tmux; the rate-limit gauges link to `retro-hud://usage` everywhere. Needs a scheme handler (`install.sh --handler`). Any other value: off, output unchanged |
 
 Example:
 
@@ -26,6 +27,29 @@ Example:
   }
 }
 ```
+
+### Click-action handler settings
+
+The reference handler (`~/.claude/retro-hud-handler.sh`) is started by
+your desktop when you click a link, so it never sees your shell's
+exports or this `env` block. It reads these from its own environment
+first, then from `~/.config/retro-hud/env` — plain `KEY=VALUE` lines,
+parsed line by line, never sourced; unknown keys are ignored and logged:
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `RETRO_HUD_MODELS` | `opus,sonnet,haiku` | comma list for the model menu; each entry may use letters, digits and `. _ : - [ ]` (e.g. `opus[1m]`) |
+| `RETRO_HUD_USAGE_URL` | `https://claude.ai/settings/usage` | page the rate-limit gauges open; must be `http(s)://` |
+
+```
+# ~/.config/retro-hud/env
+RETRO_HUD_MODELS=opus,sonnet,opus[1m]
+```
+
+`install.sh --handler` (or `--handler-only`, which leaves the statusline
+alone) creates this file with commented defaults if it doesn't exist.
+Rejected clicks and handler problems are logged to
+`~/.cache/retro-hud/handler.log`.
 
 ## Manual install
 

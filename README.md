@@ -89,6 +89,81 @@ It reacts to your **worst** gauge (context or either rate limit):
 Peripheral vision tells you something's hot before you read a number.
 Ground it with `RETRO_HUD_ALIEN=0`.
 
+## Click actions
+
+Opt in and the instruments become buttons: Ctrl+click (or click, depending
+on your terminal) a segment and a tmux menu pops up with the things you'd
+do about that reading. The pick is typed into that session's composer as
+a slash command.
+
+| Click | You get |
+|-------|---------|
+| model name | menu of models (`RETRO_HUD_MODELS`) → `/model <name>`; last item opens Claude's own `/model` picker |
+| effort dot | low · medium · high · xhigh · max → `/effort <level>`, current level marked |
+| context gauge + % | `/compact` · `/context` · `/clear` (behind a "really clear?" menu) |
+| `$` cost | types `/cost` |
+| `+N/-M` lines | read-only popup: `git diff --stat`, then the diff in `less` |
+| rate-limit gauges | opens your usage page (`RETRO_HUD_USAGE_URL`) in the browser |
+
+The branch badge and PR number keep their GitHub links.
+
+**Setup** (Linux desktop + tmux):
+
+```bash
+bash install.sh --handler        # statusline + handler (or --handler-only)
+```
+
+Then set `RETRO_HUD_ACTIONS=1` where the statusline runs (the `env` block
+of `~/.claude/settings.json`), and make sure tmux passes hyperlinks
+through — the installer prints the line if yours doesn't:
+`set -as terminal-features "xterm*:hyperlinks"`.
+
+`install.sh --handler` copies the reference handler to
+`~/.claude/retro-hud-handler.sh` and registers it for `retro-hud://` with
+a desktop entry (`xdg-mime`) — **only** if nothing handles the scheme yet;
+otherwise it prints which entry owns it and changes nothing.
+`uninstall.sh` removes the handler and its registration (if it's the one
+the installer wrote). On macOS or Windows, register the scheme with your
+platform's tool so it runs `retro-hud-handler.sh <url>`.
+
+Without `RETRO_HUD_ACTIONS=1` the HUD renders exactly as before. Outside
+tmux only the usage links appear — there's no session to type into.
+
+**Settings.** The handler is launched by your desktop, not your shell, so
+it never sees your shell's exports. It reads `RETRO_HUD_MODELS` (default
+`opus,sonnet,haiku`) and `RETRO_HUD_USAGE_URL` (default
+`https://claude.ai/settings/usage`) from its environment first, then from
+`~/.config/retro-hud/env`: plain `KEY=VALUE` lines, parsed one by one
+(never sourced; other keys are ignored). The installer creates that file
+with commented defaults.
+
+**Caveats.** A command is appended to whatever is in the composer — if you
+have a half-typed draft, it's sent with it (menu titles say "types into
+the composer"). Clicking mid-turn is fine: Claude Code queues the input.
+
+### URL contract
+
+```
+retro-hud://<action>?pane=<tmux pane id>[&sock=<tmux socket path>]
+```
+
+`<action>` is `model`, `effort`, `ctx`, `cost`, `diff`, `usage`, or
+`agent` (reserved). Values are percent-encoded (`pane=%2512` is pane
+`%12`). `sock` is the server socket from `$TMUX`, so non-default servers
+(`tmux -L`) are addressed correctly. The `effort` link also carries
+`cur=<level>` so the menu can mark the current level. `usage` links have
+no query outside tmux. Unknown keys are ignored, so you can write your
+own handler against this contract.
+
+The reference handler treats every URL as untrusted — any program can
+print a link: it accepts only the whitelist above, validates each value,
+acts only when the pane is the clicking client's **active** pane and is
+running `claude`, takes the diff's directory from tmux (never from the
+link) and runs git with config-driven programs disabled. Rejected clicks
+are logged to `~/.cache/retro-hud/handler.log`. To add your own actions,
+create `~/.claude/retro-hud-handler.local.sh`: it is sourced first with
+the same arguments and may handle a URL and `exit`.
+
 ## Configuration
 
 Every decoration and disclosure rule has an env-var knob (`RETRO_HUD_*`),
