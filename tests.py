@@ -774,8 +774,13 @@ class ShellHarness(unittest.TestCase):
         i = 1
         opts = {}
         while argv[i].startswith("-"):
+            if argv[i] == "-O":      # bare flag: keep the menu open across a mouse release
+                opts["-O"] = True
+                i += 1
+                continue
             opts[argv[i]] = argv[i + 1]
             i += 2
+        self.assertTrue(opts.get("-O"), "menus must keep open across the right-click release")
         rest = argv[i:]
         items = [tuple(rest[j:j + 3]) for j in range(0, len(rest), 3)]
         return opts.get("-c"), opts.get("-T"), items

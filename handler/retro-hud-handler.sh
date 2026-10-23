@@ -146,7 +146,10 @@ show_menu() {  # title, then name/key/command triples
         exit 0
     fi
     need_client
-    tm display-menu -c "$CLIENT" -x C -y C -T "$title" "$@" || log "display-menu failed"
+    # -O: keep the menu open when the mouse button is RELEASED outside it. A menu opened by a
+    # right-click press (tmux's mouse_hyperlink binding) would otherwise be dismissed by the
+    # matching release a few ms later. A later press outside, Esc or q still closes it.
+    tm display-menu -O -c "$CLIENT" -x C -y C -T "$title" "$@" || log "display-menu failed"
 }
 
 # Compose the slash command for a validated (command, arg) pair.
