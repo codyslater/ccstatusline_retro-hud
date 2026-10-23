@@ -29,6 +29,24 @@ Env toggles:
                                  0: skip the folder emoji entirely
     RETRO_HUD_HOME_URL=<url>     end row 2 with a ⌂ jump-home link (OSC 8) to
                                  any URL your desktop can open; never dropped
+    RETRO_HUD_PRESENCE=0         gauge-only alien: ignore what the agent does
+    RETRO_HUD_SPRITE=alien       presence sprite set: alien, cat, robot, ghost
+    RETRO_HUD_AGENT_NAME=<name>  prefix state bubbles ("Nova: ready")
+    RETRO_HUD_QUIPS=0            no idle quips
+    RETRO_HUD_IDLE_MIN=10        minutes of "your turn" before idle
+    RETRO_HUD_SLEEP_MIN=60       minutes of "your turn" before asleep
+    RETRO_HUD_CACHE_DIR=<dir>    presence files (default ~/.cache/retro-hud)
+
+Agent presence: the alien on the top rule follows the session's agent,
+read from a bounded tail of the transcript (entry type, stop reason,
+error flag and timestamp only; never message text) and, when
+`install.sh --hooks` was run, from presence-hook.sh's log. It hustles
+while the agent works, waves when the turn is yours, beckons at a
+permission prompt, flinches at a burst of tool errors, then dozes and
+sleeps; a red- or amber-zone gauge still takes precedence. Short bubbles
+on the rule come from the events channel
+(<cache>/<session_id>.events.jsonl, one {"ts", "text", "ttl"} per line),
+from state changes, and from rare idle quips.
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
