@@ -82,6 +82,7 @@ import shutil
 import sys
 import time
 import unicodedata
+import zlib
 from urllib.parse import quote
 
 # ── HIGH CONTRAST sci-fi palette ──
@@ -891,6 +892,165 @@ def _map_pane(d, sid):
             os.remove(tmp)
         except OSError:
             pass
+
+
+# ── pixel creature (RETRO_HUD_CREATURE, on by default) ──
+# The agent's presence as a small mirrored pixel monster: a 9×4 body
+# generated from a seed, drawn with half blocks (one text cell carries two
+# pixel rows), so its upper half sits on a head line above row 1 and its
+# lower half stands on the top rule. It owns a fixed 13-cell box on both
+# lines and nothing else: rows 1 and 2 never move.
+FAMILIES = ("blob", "beast", "alien", "bot")
+_FAMILY_ALIAS = {"cat": "beast", "robot": "bot", "ghost": "blob"}
+CREATURE_COLORS = {"pink": 198, "green": 46, "purple": 135, "cyan": 45, "orange": 202}
+CREATURE_PALETTE = (198, 46, 135, 45)  # seeded body colours; orange is for warnings
+CREATURE_ATTEMPTS = 16
+_M32 = 0xFFFFFFFF
+
+
+def _mulberry32(seed):
+    """Small seeded PRNG (floats in [0, 1)), identical on every Python."""
+    s = seed & _M32
+
+    def rand():
+        nonlocal s
+        s = (s + 0x6D2B79F5) & _M32
+        t = ((s ^ (s >> 15)) * (1 | s)) & _M32
+        t = ((t + (((t ^ (t >> 7)) * (61 | t)) & _M32)) & _M32) ^ t
+        return ((t ^ (t >> 14)) & _M32) / 4294967296
+    return rand
+
+
+def _seed_of(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v & _M32
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+        if re.fullmatch(r"-?[0-9]{1,30}", v):
+            return int(v) & _M32
+        return zlib.crc32(v.encode("utf-8", "replace")) & _M32
+    return None
+
+
+def creature_seed(state=None, env="", sid=""):
+    """The creature's seed: the state file's `seed`, else
+    RETRO_HUD_CREATURE_SEED, else the session id, else 0. Integers (or
+    integer strings) are taken as they are, other strings hashed with
+    CRC-32, so a seed means the same creature on every Python."""
+    for v in (state, env, sid):
+        s = _seed_of(v)
+        if s is not None:
+            return s
+    return 0
+
+
+def creature_color(seed, pin=""):
+    """256-colour index of the body: RETRO_HUD_CREATURE_COLOR (a name or
+    0–255) pins it, else one of CREATURE_PALETTE chosen by the seed."""
+    pin = str(pin or "").strip().lower()
+    if pin in CREATURE_COLORS:
+        return CREATURE_COLORS[pin]
+    if pin.isdigit() and int(pin) <= 255:
+        return int(pin)
+    return CREATURE_PALETTE[int(_mulberry32(seed ^ 0x5EED)() * len(CREATURE_PALETTE))]
+
+
+def creature_family(name):
+    """A family name, or a 2.x sprite-set name mapped to its family."""
+    if name in FAMILIES:
+        return name
+    return _FAMILY_ALIAS.get(name, "alien") if isinstance(name, str) else "alien"
+
+
+def _grid_from(rows):
+    k = {".": None, "X": "body", "E": "eye"}
+    return tuple(tuple(k[ch] for ch in row) for row in rows)
+
+
+FALLBACK_GRID = _grid_from(("..X...X..",
+                            ".XEXXXEX.",
+                            "XXXXXXXXX",
+                            ".X..X..X."))
+
+# Per-family fill probabilities for pixel rows 0–2, half-body columns
+# 0–4 (column 4 is the centre); row 3 (legs) and the eyes are placed by
+# rule in _grow.
+_FAMILY_PROBS = {
+    "alien": ((0, 0, .45, .35, .25), (0, .1, .6, .95, 1), (.35, .85, 1, 1, 1)),
+    "beast": ((0, .4, .5, .3, .2), (.2, .7, 1, 1, 1), (.8, 1, 1, 1, 1)),
+    "blob": ((0, .2, .8, 1, 1), (.4, 1, 1, 1, 1), (.6, 1, 1, 1, 1)),
+}
+
+
+def _grow(rand, family):
+    """One candidate half body: 4 rows × 5 columns of None/body/eye."""
+    h = [[None] * 5 for _ in range(4)]
+    if family == "bot":  # square: a block with flat top, antenna or ears
+        left = 0 if rand() < .5 else 1
+        for r in (1, 2):
+            for c in range(left, 5):
+                h[r][c] = "body"
+        top = int(rand() * 3)
+        for c in range(left, 5):
+            if top == 0 or (top == 1 and c == 4) or (top == 2 and c == left):
+                h[0][c] = "body"
+        eye = left + 1
+        leg = 2 if rand() < .5 else 3
+        h[3][max(leg, left)] = "body"
+    else:
+        for r, probs in enumerate(_FAMILY_PROBS[family]):
+            for c, p in enumerate(probs):
+                if rand() < p:
+                    h[r][c] = "body"
+        eye = 2 if rand() < .5 else 3
+        if family == "blob":  # a wide base instead of legs
+            for c in range(1 + int(rand() * 3), 5):
+                h[3][c] = h[2][c] = "body"
+        else:
+            leg = 1 + int(rand() * (2 if family == "alien" else 3))
+            h[3][leg] = h[2][leg] = "body"
+            if family == "alien":
+                h[3][4] = "body"  # the third, middle leg
+            elif leg > 1 and rand() < .4:
+                h[3][leg - 1] = h[2][leg - 1] = "body"  # a thick leg
+            for c in range(leg, 5):
+                h[2][c] = "body"
+    h[1][4] = h[2][4] = "body"  # spine
+    for c in range(eye + 1, 5):
+        h[1][c] = "body"        # body between the eyes
+    h[1][eye] = "eye"
+    return h
+
+
+def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS):
+    """The creature's body: 4 pixel rows × 9 columns of None, "body" or
+    "eye" (a tuple of tuples). Mirrored left/right, 4-connected, two eyes
+    on row 1 with body between them, at least two cells of legs on row 3.
+    Deterministic per (seed, family); after `attempts` candidates that
+    break a rule it returns FALLBACK_GRID."""
+    family = creature_family(family)
+    rand = _mulberry32(seed ^ zlib.crc32(family.encode()))
+    for _ in range(attempts):
+        h = _grow(rand, family)
+        g = [[h[r][min(c, 8 - c)] for c in range(9)] for r in range(4)]
+        seen, todo = {(1, 4)}, [(1, 4)]  # keep what touches the spine
+        while todo:
+            r, c = todo.pop()
+            for n in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                if 0 <= n[0] < 4 and 0 <= n[1] < 9 and g[n[0]][n[1]] and n not in seen:
+                    seen.add(n)
+                    todo.append(n)
+        for r in range(4):
+            for c in range(9):
+                if (r, c) not in seen:
+                    g[r][c] = None
+        if sum(1 for v in g[1] if v == "eye") == 2 and sum(1 for v in g[3] if v) >= 2:
+            return tuple(tuple(row) for row in g)
+    return FALLBACK_GRID
 
 
 # ── row assembly ──

@@ -15,8 +15,11 @@ import unittest
 # CLI tests inherit os.environ), and nothing may touch the real cache dir.
 for _k in ("RETRO_HUD_PRESENCE", "RETRO_HUD_SPRITE", "RETRO_HUD_AGENT_NAME",
            "RETRO_HUD_QUIPS", "RETRO_HUD_IDLE_MIN", "RETRO_HUD_SLEEP_MIN",
-           "RETRO_HUD_ALIEN"):
+           "RETRO_HUD_ALIEN", "RETRO_HUD_CREATURE_SEED", "RETRO_HUD_CREATURE_COLOR"):
     os.environ.pop(_k, None)
+# The 2.x suite pins the two-row HUD: RETRO_HUD_CREATURE=0 must stay
+# byte-identical to it. Creature tests switch it on (CreatureCase).
+os.environ["RETRO_HUD_CREATURE"] = "0"
 _SUITE_TMP = tempfile.mkdtemp(prefix="retro-hud-tests-")
 os.environ["RETRO_HUD_CACHE_DIR"] = os.path.join(_SUITE_TMP, "cache")
 
@@ -2381,6 +2384,113 @@ class TestInstallHooks(unittest.TestCase):
                          [{"hooks": [{"type": "command", "command": "echo mine"}]}])
         self.assertNotIn("Notification", data["hooks"])
         self.assertFalse(os.path.exists(os.path.join(self.claude, "presence-hook.sh")))
+
+
+def _connected(grid):
+    cells = {(r, c) for r in range(len(grid)) for c in range(len(grid[0])) if grid[r][c]}
+    if not cells:
+        return False
+    start = min(cells)
+    seen, todo = {start}, [start]
+    while todo:
+        r, c = todo.pop()
+        for n in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if n in cells and n not in seen:
+                seen.add(n)
+                todo.append(n)
+    return seen == cells
+
+
+class TestCreatureGrid(unittest.TestCase):
+    SEEDS = list(range(200)) + [2 ** 32 - 1, 123456789]
+
+    def check(self, g, label):
+        self.assertEqual(len(g), 4, label)
+        for row in g:
+            self.assertEqual(len(row), 9, label)
+            self.assertTrue(all(v in (None, "body", "eye") for v in row), label)
+            self.assertEqual(list(row), list(reversed(row)), label)  # mirrored
+        self.assertTrue(_connected(g), label)
+        eyes = [(r, c) for r in range(4) for c in range(9) if g[r][c] == "eye"]
+        self.assertEqual(len(eyes), 2, label)
+        (r1, c1), (r2, c2) = sorted(eyes)
+        self.assertEqual((r1, r2), (1, 1), label)
+        self.assertEqual(c1 + c2, 8, label)
+        self.assertTrue(any(g[1][c] == "body" for c in range(c1 + 1, c2)), label)
+        self.assertGreaterEqual(sum(1 for v in g[3] if v), 2, label)
+
+    def test_every_family_and_seed_is_well_formed(self):
+        self.assertEqual(sl.FAMILIES, ("blob", "beast", "alien", "bot"))
+        for fam in sl.FAMILIES:
+            for seed in self.SEEDS:
+                self.check(sl.creature_grid(seed, fam), (fam, seed))
+
+    def test_deterministic_and_varied(self):
+        for fam in sl.FAMILIES:
+            self.assertEqual(sl.creature_grid(7, fam), sl.creature_grid(7, fam))
+            shapes = {sl.creature_grid(s, fam) for s in range(60)}
+            self.assertGreater(len(shapes), 5, fam)
+        # families look different from each other for the same seed
+        self.assertGreater(len({sl.creature_grid(3, f) for f in sl.FAMILIES}), 1)
+
+    def test_fallback_body_when_attempts_run_out(self):
+        self.check(sl.FALLBACK_GRID, "fallback")
+        for fam in sl.FAMILIES:
+            self.assertEqual(sl.creature_grid(5, fam, attempts=0), sl.FALLBACK_GRID)
+
+    def test_unknown_family_is_the_alien(self):
+        self.assertEqual(sl.creature_grid(9, "dragon"), sl.creature_grid(9, "alien"))
+
+    def test_leg_counts_per_family(self):
+        def legs(row):
+            runs, prev = 0, None
+            for v in row:
+                if v and not prev:
+                    runs += 1
+                prev = v
+            return runs
+        for seed in range(60):
+            self.assertEqual(legs(sl.creature_grid(seed, "alien")[3]), 3, seed)
+            self.assertEqual(legs(sl.creature_grid(seed, "beast")[3]), 2, seed)
+            self.assertEqual(legs(sl.creature_grid(seed, "bot")[3]), 2, seed)
+
+
+class TestCreatureIdentity(unittest.TestCase):
+    def test_seed_sources_normalise(self):
+        cs = sl.creature_seed
+        self.assertEqual(cs(None, "", ""), 0)
+        self.assertEqual(cs(None, "42", ""), 42)
+        self.assertEqual(cs(42, "", ""), 42)              # state-file int == env "42"
+        self.assertEqual(cs(None, " 42 ", ""), 42)
+        self.assertEqual(cs(None, "-1", ""), 2 ** 32 - 1)  # wraps into 32 bits
+        self.assertEqual(cs(None, "", "abc-session"), cs(None, "abc-session", ""))
+        # stable string hash: crc32, not hash()
+        self.assertEqual(cs(None, "hello", ""), 907060870)
+        self.assertEqual(cs(7, "42", "sid"), 7)             # state file wins
+        self.assertEqual(cs(None, "42", "sid"), 42)         # then the env
+        for junk in (True, False, {"a": 1}, [1], 1.5, ""):
+            self.assertEqual(cs(junk, "", "sid"), cs(None, "", "sid"), repr(junk))
+        self.assertEqual(cs("12", "", ""), 12)              # a string seed in the file
+        self.assertEqual(cs(2 ** 40 + 5, "", ""), 5)
+
+    def test_color_from_seed_and_pins(self):
+        cols = {sl.creature_color(s) for s in range(64)}
+        self.assertEqual(cols, {198, 46, 135, 45})
+        self.assertEqual(sl.creature_color(3), sl.creature_color(3))
+        self.assertEqual(sl.creature_color(3, "pink"), 198)
+        self.assertEqual(sl.creature_color(3, "Cyan"), 45)
+        self.assertEqual(sl.creature_color(3, "208"), 208)
+        self.assertEqual(sl.creature_color(3, "300"), sl.creature_color(3))
+        self.assertEqual(sl.creature_color(3, "mauve"), sl.creature_color(3))
+
+    def test_family_names_and_ascii_mapping(self):
+        f = sl.creature_family
+        for name in sl.FAMILIES:
+            self.assertEqual(f(name), name)
+        self.assertEqual((f("alien"), f("cat"), f("robot"), f("ghost")),
+                         ("alien", "beast", "bot", "blob"))
+        self.assertEqual(f("dragon"), "alien")
+        self.assertEqual(f(None), "alien")
 
 
 class TestHelpers(unittest.TestCase):
