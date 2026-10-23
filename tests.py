@@ -677,6 +677,376 @@ class TestFrameBubble(unittest.TestCase):
         self.assertTrue("/o.o\\" in plain or "/-.-\\" in plain)
 
 
+_KNOBS = ("RETRO_HUD_PRESENCE", "RETRO_HUD_SPRITE", "RETRO_HUD_AGENT_NAME",
+          "RETRO_HUD_QUIPS", "RETRO_HUD_IDLE_MIN", "RETRO_HUD_SLEEP_MIN",
+          "RETRO_HUD_ALIEN")
+
+
+class PresenceCase(unittest.TestCase):
+    """A temp cache dir and transcript per test; knobs restored after."""
+    SID = "0d7e5c1a-session"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir=_SUITE_TMP)
+        self.cache = os.path.join(self.tmp, "cache")
+        self._saved_cache = os.environ["RETRO_HUD_CACHE_DIR"]
+        os.environ["RETRO_HUD_CACHE_DIR"] = self.cache
+        self.transcript = os.path.join(self.tmp, "t.jsonl")
+
+    def tearDown(self):
+        os.environ["RETRO_HUD_CACHE_DIR"] = self._saved_cache
+        for k in _KNOBS:
+            os.environ.pop(k, None)
+
+    def tx(self, *entries):
+        with open(self.transcript, "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+    def payload(self, base=MINIMAL, sid=None):
+        p = copy.deepcopy(base)
+        p["transcript_path"] = self.transcript
+        p["session_id"] = self.SID if sid is None else sid
+        return p
+
+    def row1(self, now=NOW, base=MINIMAL, cols=160, sid=None):
+        return sl.strip_ansi(sl.render(self.payload(base, sid), cols, now)[0])
+
+    def path(self, suffix):
+        return os.path.join(self.cache, self.SID + suffix)
+
+    def state_file(self):
+        with open(self.path(".state.json")) as f:
+            return json.load(f)
+
+    def put_state(self, **kw):
+        os.makedirs(self.cache, exist_ok=True)
+        with open(self.path(".state.json"), "w") as f:
+            json.dump(kw, f)
+
+    def events(self, *evs):
+        os.makedirs(self.cache, exist_ok=True)
+        with open(self.path(".events.jsonl"), "a") as f:
+            for e in evs:
+                f.write((e if isinstance(e, str) else json.dumps(e)) + "\n")
+
+    def hooks(self, *lines):
+        os.makedirs(self.cache, exist_ok=True)
+        with open(self.path(".hooks.jsonl"), "a") as f:
+            for ln in lines:
+                f.write(json.dumps(ln) + "\n")
+
+
+class TestPresenceRender(PresenceCase):
+    def test_unknown_state_is_the_gauge_alien_and_touches_nothing(self):
+        # no transcript on disk → exactly the 2.7 output, no cache files
+        for cols in (60, 100, 160, 220):
+            self.assertEqual(sl.render(self.payload(FULL), cols, NOW),
+                             sl.render(copy.deepcopy(FULL), cols, NOW))
+        self.assertFalse(os.path.exists(self.cache))
+
+    def test_working_agent_hustles(self):
+        self.tx(user(NOW - 9), asst(NOW - 2, "tool_use", ("tool_use",)))
+        self.assertIn("/o.o/", self.row1(NOW))
+        self.assertIn("\\o.o\\", self.row1(NOW + 10))
+
+    def test_presence_off_restores_the_gauge_alien(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_PRESENCE"] = "0"
+        for cols in (100, 160):
+            self.assertEqual(sl.render(self.payload(FULL), cols, NOW),
+                             sl.render(copy.deepcopy(FULL), cols, NOW))
+        self.assertFalse(os.path.exists(self.cache))
+
+    def test_alien_zero_grounds_everything(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW, "text": "hello", "ttl": 30})
+        os.environ["RETRO_HUD_ALIEN"] = "0"
+        plain = self.row1(NOW)
+        self.assertNotIn("o.o", plain)
+        self.assertNotIn("hello", plain)
+        self.assertFalse(os.path.exists(self.path(".state.json")))
+
+    def test_rows_1_and_2_unchanged_with_presence_on(self):
+        # Presence may only redraw the top rule: row 2 is byte-identical,
+        # row 1's segments are identical, and the rule keeps its length.
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW - 1, "text": "deploy finished", "ttl": 600})
+        for cols in range(50, 241, 10):
+            for t in (NOW, NOW + 10, NOW + 30):
+                on = sl.render(self.payload(FULL), cols, t)
+                os.environ["RETRO_HUD_PRESENCE"] = "0"
+                off = sl.render(self.payload(FULL), cols, t)
+                del os.environ["RETRO_HUD_PRESENCE"]
+                self.assertEqual(on[1], off[1], cols)
+                p_on, p_off = sl.strip_ansi(on[0]), sl.strip_ansi(off[0])
+                self.assertEqual(sl.vislen(on[0]), sl.vislen(off[0]), cols)
+                # the gauge alien's rule holds no spaces: the last one is
+                # where the segments end and the rule begins
+                m = re.match(r"^(.*) [^ ]*┐$", p_off)
+                segs = m.group(1) if m else p_off
+                self.assertTrue(p_on.startswith(segs + (" " if m else "")), cols)
+                self.assertEqual(p_on[-1], p_off[-1])
+
+    def test_sprite_set_from_env_and_state_file(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_SPRITE"] = "cat"
+        self.assertIn("=^.^/", self.row1(NOW))
+        self.put_state(sprite="ghost")
+        self.assertIn("(o.o~", self.row1(NOW))
+
+    def test_hostile_session_id_writes_nothing(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        plain = self.row1(NOW, sid="../../escape")
+        self.assertIn("/o.o/", plain)  # the transcript still drives the mood
+        self.assertFalse(os.path.exists(self.cache))
+
+    def test_unwritable_cache_dir_means_no_bubble_and_no_crash(self):
+        blocker = os.path.join(self.tmp, "file-not-dir")
+        with open(blocker, "w") as f:
+            f.write("x")
+        os.environ["RETRO_HUD_CACHE_DIR"] = os.path.join(blocker, "sub")
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW)
+        self.tx(asst(NOW + 5))
+        plain = self.row1(NOW + 6)
+        self.assertIn("^.^", plain)
+        self.assertNotIn("╴", plain)
+        self.assertNotIn("╶", plain)
+
+    def test_no_subprocess_in_statusline(self):
+        with open(sl.__file__) as f:
+            src = f.read()
+        self.assertIsNone(re.search(r"^\s*(import|from)\s+(subprocess|pty)\b", src, re.M))
+        for banned in ("subprocess.", "os.system(", "os.popen(", "os.exec", "os.spawn",
+                       "os.fork("):
+            self.assertNotIn(banned, src)
+
+
+class TestBubbles(PresenceCase):
+    def test_state_file_snapshot(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        sl.render(self.payload(FULL), 160, NOW)
+        s = self.state_file()
+        self.assertEqual(s["state"], "working")
+        self.assertAlmostEqual(s["since"], NOW - 2)
+        self.assertEqual((s["ctx_pct"], s["limit_pct"], s["cost"]), (72, 81, 3.21))
+        self.assertEqual(sorted(os.listdir(self.cache)), [self.SID + ".state.json"])
+
+    def test_ready_once_per_transition(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.assertNotIn("ready", self.row1(NOW))
+        self.tx(asst(NOW - 2, "tool_use"), asst(NOW + 4))
+        for t in (NOW + 5, NOW + 20, NOW + 34):
+            self.assertIn("╴ready", self.row1(t).replace("ready╶", "╴ready"), t)
+        for t in (NOW + 36, NOW + 60, NOW + 200):
+            self.assertNotIn("ready", self.row1(t), t)
+
+    def test_first_sight_is_not_a_transition(self):
+        self.tx(asst(NOW - 2))
+        self.assertNotIn("ready", self.row1(NOW))
+
+    def test_agent_name_prefixes_state_bubbles(self):
+        os.environ["RETRO_HUD_AGENT_NAME"] = "Nova"
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW)
+        self.tx(asst(NOW + 1))
+        self.assertIn("Nova: ready", self.row1(NOW + 2))
+
+    def test_error_bubble(self):
+        self.tx(asst(NOW - 9, "tool_use"))
+        self.row1(NOW)
+        self.tx(result(NOW + 1, True), result(NOW + 3, True))
+        plain = self.row1(NOW + 4)
+        self.assertIn("hm.", plain)
+        self.assertIn("/>.<\\", plain)
+
+    def test_gauge_crossings(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        hot = copy.deepcopy(MINIMAL)
+        hot["context_window"] = {"used_percentage": 85}
+        self.row1(NOW, base=hot)
+        hot["context_window"]["used_percentage"] = 92
+        self.assertIn("compact?", self.row1(NOW + 5, base=hot))
+        warm = copy.deepcopy(MINIMAL)
+        warm["rate_limits"] = {"five_hour": {"used_percentage": 60}}
+        self.row1(NOW + 100, base=warm)
+        warm["rate_limits"]["five_hour"]["used_percentage"] = 71
+        self.assertIn("limit soon", self.row1(NOW + 105, base=warm))
+
+    def test_mute(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW)
+        s = self.state_file()
+        s["mute_until"] = NOW + 3600
+        self.put_state(**s)
+        self.events({"ts": NOW, "text": "hello there", "ttl": 60})
+        self.tx(asst(NOW + 1))
+        plain = self.row1(NOW + 2)
+        self.assertNotIn("ready", plain)
+        self.assertNotIn("hello", plain)
+        self.assertEqual(self.state_file()["mute_until"], NOW + 3600)  # preserved
+
+    def test_mute_expires(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.put_state(state="working", since=NOW - 2, mute_until=NOW + 10)
+        self.events({"ts": NOW + 5, "text": "hello there", "ttl": 60})
+        self.assertNotIn("hello", self.row1(NOW + 9))
+        self.assertIn("hello there", self.row1(NOW + 11))
+
+    def test_events_beat_state_bubbles_and_expire(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW)
+        self.tx(asst(NOW + 1))
+        self.events({"ts": NOW, "text": "tests green", "ttl": 20})
+        plain = self.row1(NOW + 2)
+        self.assertIn("tests green", plain)
+        self.assertNotIn("ready", plain)
+        # once the event expires the still-fresh state bubble shows
+        self.assertIn("ready", self.row1(NOW + 21))
+        self.assertNotIn("tests green", self.row1(NOW + 21))
+
+    def test_newest_unexpired_event_wins(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW - 5, "text": "first", "ttl": 100},
+                    "{garbage", {"ts": NOW - 1, "text": "second", "ttl": 100},
+                    {"ts": NOW - 50, "text": "stale", "ttl": 10},
+                    {"ts": NOW - 1, "text": 7}, ["not", "a", "dict"])
+        self.assertIn("second", self.row1(NOW))
+        # an expired newer event falls back to the older live one
+        self.events({"ts": NOW, "text": "gone", "ttl": 0})
+        plain = self.row1(NOW + 1)
+        self.assertNotIn("gone", plain)
+        self.assertIn("second", plain)
+
+    def test_event_default_ttl(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW, "text": "no ttl given"})
+        self.assertIn("no ttl given", self.row1(NOW + 29))
+        self.assertNotIn("no ttl given", self.row1(NOW + 31))
+
+    def test_event_text_sanitized_and_clamped(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW, "text": "a\x1b[31mb\x07c\nd" + "z" * 40, "ttl": 60})
+        row = sl.render(self.payload(), 160, NOW)[0]
+        self.assertNotIn("\x07", row)
+        self.assertNotIn("\x1b[31m", row)
+        plain = sl.strip_ansi(row)
+        m = re.search(r"╴([^─]+)|([^─ ]+)╶", plain)
+        text = m.group(1) or m.group(2)
+        self.assertTrue(text.startswith("a[31mbcd"), text)
+        self.assertEqual(sl.vwidth(text), sl.BUBBLE_MAX)
+        self.assertEqual(sl.vislen(row), 160)
+
+    def test_idle_quip_then_ambient_z(self):
+        self.tx(asst(NOW - 1000))
+        self.put_state(state="idle", since=NOW - 1000)
+        plain = self.row1(NOW)
+        quip = [q for q in sl.QUIPS if q in plain]
+        self.assertEqual(len(quip), 1, plain)
+        self.assertIn("z", self.row1(NOW + 31))          # ambient doze
+        self.assertFalse([q for q in sl.QUIPS if q in self.row1(NOW + 600)])
+        self.assertTrue([q for q in sl.QUIPS if q in self.row1(NOW + 1201)])
+
+    def test_quips_off(self):
+        os.environ["RETRO_HUD_QUIPS"] = "0"
+        self.tx(asst(NOW - 1000))
+        self.put_state(state="idle", since=NOW - 1000)
+        plain = self.row1(NOW)
+        self.assertFalse([q for q in sl.QUIPS if q in plain])
+        self.assertRegex(plain, r"╴z─|─z╶")
+
+    def test_asleep_ambient(self):
+        self.tx(asst(NOW - 4000))
+        self.put_state(state="asleep", since=NOW - 4000)
+        plain = self.row1(NOW)
+        self.assertIn("/_._\\", plain)
+        self.assertRegex(plain, r"╴zZ─|─zZ╶")
+
+    def test_quip_pool(self):
+        self.assertGreaterEqual(len(sl.QUIPS), 12)
+        for q in sl.QUIPS:
+            self.assertLessEqual(sl.vwidth(q), sl.BUBBLE_MAX, q)
+            self.assertTrue(q.isprintable() and q.isascii(), q)
+
+    def test_idle_threshold_env(self):
+        os.environ["RETRO_HUD_IDLE_MIN"] = "1"
+        os.environ["RETRO_HUD_QUIPS"] = "0"
+        self.tx(asst(NOW - 90))
+        self.assertIn("/-_-\\", self.row1(NOW))
+        os.environ["RETRO_HUD_SLEEP_MIN"] = "1"
+        self.assertIn("/_._\\", self.row1(NOW))
+
+    def test_old_files_pruned_once(self):
+        os.makedirs(self.cache)
+        old = NOW - 8 * 86400
+        names = ["a.state.json", "b.events.jsonl", "c.hooks.jsonl", "keep.txt",
+                 "fresh.state.json"]
+        for n in names:
+            p = os.path.join(self.cache, n)
+            open(p, "w").close()
+            t = NOW - 60 if n == "fresh.state.json" else old
+            os.utime(p, (t, t))
+        self.tx(asst(NOW - 2, "tool_use"))
+        sl.render(self.payload(), 160, NOW)
+        left = sorted(os.listdir(self.cache))
+        self.assertEqual(left, sorted(["keep.txt", "fresh.state.json",
+                                       self.SID + ".state.json"]))
+        self.assertEqual(self.state_file()["last_prune"], NOW)
+
+
+class TestHooksMerge(PresenceCase):
+    def test_merge_rules(self):
+        m = sl.merge_hooks
+        # newer hook wins over the transcript
+        self.assertEqual(m("working", NOW - 20, [(NOW - 10, "needs", "")], NOW),
+                         ("needs", NOW - 10))
+        # older hook loses
+        self.assertEqual(m("working", NOW - 5, [(NOW - 10, "yours", "")], NOW),
+                         ("working", NOW - 5))
+        # an idle_prompt does not paper over a pending permission prompt
+        self.assertEqual(m("working", NOW - 100,
+                           [(NOW - 90, "needs", ""), (NOW - 30, "yours", "idle_prompt")],
+                           NOW), ("needs", NOW - 90))
+        # … but does once the transcript moved past the prompt
+        self.assertEqual(m("working", NOW - 60,
+                           [(NOW - 90, "needs", ""), (NOW - 30, "yours", "idle_prompt")],
+                           NOW)[0], "yours")
+        # a run of the same state keeps its first timestamp, and decays
+        self.assertEqual(m("working", NOW - 900,
+                           [(NOW - 700, "yours", ""), (NOW - 640, "yours", "idle_prompt")],
+                           NOW), ("idle", NOW - 700))
+        # an error burst is never overridden
+        self.assertEqual(m("error", NOW - 5, [(NOW - 1, "yours", "")], NOW),
+                         ("error", NOW - 5))
+        # hooks alone are enough when the transcript is unreadable
+        self.assertEqual(m("unknown", 0, [(NOW - 3, "working", "")], NOW),
+                         ("working", NOW - 3))
+        # nothing usable → unchanged
+        self.assertEqual(m("yours", NOW - 5, [], NOW), ("yours", NOW - 5))
+
+    def test_read_hooks(self):
+        self.hooks({"ts": NOW - 3, "state": "working"},
+                   {"ts": NOW - 1.5, "state": "needs"},
+                   {"ts": "x", "state": "yours"}, {"ts": NOW, "state": "dancing"},
+                   {"ts": NOW, "state": "yours", "src": "idle_prompt"})
+        self.assertEqual(sl.read_hooks(self.path(".hooks.jsonl")),
+                         [(NOW - 3, "working", ""), (NOW - 1.5, "needs", ""),
+                          (NOW, "yours", "idle_prompt")])
+        self.assertEqual(sl.read_hooks(self.path(".nope")), [])
+
+    def test_permission_prompt_beckons_in_render(self):
+        self.tx(asst(NOW - 20, "tool_use", ("tool_use",)))
+        self.row1(NOW - 15)
+        self.hooks({"ts": NOW - 10, "state": "needs"})
+        plain = self.row1(NOW)
+        self.assertIn("o.o?", plain)
+        self.assertIn("need you", plain)
+        # the tool result after approval puts it back to work
+        self.tx(asst(NOW - 20, "tool_use", ("tool_use",)), result(NOW + 5))
+        self.assertIn("/o.o/", self.row1(NOW + 10).replace("\\o.o\\", "/o.o/"))
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")

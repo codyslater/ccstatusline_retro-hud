@@ -520,6 +520,256 @@ def agent_state(entries, now, idle_s=IDLE_S, sleep_s=SLEEP_S):
     return _decay(state, since, now, idle_s, sleep_s), since
 
 
+# ── presence: hooks layer, state file, bubbles ──
+HOOK_STATES = ("working", "yours", "needs")
+STATE_BUBBLE_S = 30        # state-change bubbles show this long
+EVENT_TTL_S = 30           # default lifetime of an events-channel bubble
+QUIP_EVERY_S = 20 * 60     # at most one idle quip per this many seconds
+PRUNE_AGE_S = 7 * 86400    # cache files untouched this long are removed
+PRUNE_EVERY_S = 3600
+_CACHE_SUFFIXES = (".state.json", ".events.jsonl", ".hooks.jsonl")
+_SID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+QUIPS = ("all quiet.", "systems nominal", "standing by", "scanning sector 7",
+         "orbit stable", "insert coin", "beep boop", "0 bogeys on scope",
+         "buffer empty", "ping?", "hello, operator", "stars look nice",
+         "*hums quietly*", "charging lasers", "awaiting orders")
+
+
+def _tail_lines(path, limit):
+    """Parsed JSON objects from the last `limit` bytes of a JSONL file."""
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            start = max(size - limit, 0)
+            f.seek(start)
+            lines = f.read(limit).split(b"\n")
+    except (OSError, TypeError, ValueError):
+        return []
+    out = []
+    for line in lines[1:] if start else lines:
+        try:
+            e = json.loads(line.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if isinstance(e, dict):
+            out.append(e)
+    return out
+
+
+def _num_or_none(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def read_hooks(path):
+    """[(ts, state, src)] from the hook log, oldest→newest."""
+    out = []
+    for e in _tail_lines(path, 4096):
+        ts = _num_or_none(e.get("ts"))
+        if ts is not None and e.get("state") in HOOK_STATES:
+            src = e.get("src")
+            out.append((ts, e["state"], src if isinstance(src, str) else ""))
+    return out
+
+
+def merge_hooks(state, since, hooks, now, idle_s=IDLE_S, sleep_s=SLEEP_S):
+    """Let hook-reported state that is newer than the transcript win.
+
+    Hooks see what the transcript cannot (a pending permission prompt).
+    An idle_prompt notification never papers over a pending `needs`; a
+    run of the same state keeps its first timestamp so idle/asleep decay
+    counts from when the turn really ended. An error burst always stands.
+    """
+    if state == "error" or not hooks:
+        return state, since
+    i = len(hooks) - 1
+    if hooks[i][2] == "idle_prompt":
+        j = i - 1
+        while j >= 0 and hooks[j][2] == "idle_prompt":
+            j -= 1
+        if j >= 0 and hooks[j][1] == "needs" and hooks[j][0] >= since - 1:
+            i = j
+    ts, hstate, _ = hooks[i]
+    if state != "unknown" and ts < since - 1:  # 1 s slack for whole-second hook clocks
+        return state, since
+    while i > 0 and hooks[i - 1][1] == hstate:
+        i -= 1
+    hsince = hooks[i][0]
+    return _decay(hstate, hsince, now, idle_s, sleep_s), hsince
+
+
+def cache_dir(create=True):
+    """Per-user presence cache dir, or "" if unusable.
+
+    RETRO_HUD_CACHE_DIR, else ~/.cache/retro-hud, else (no HOME, or it
+    can't be created) /tmp/retro-hud-<uid>. With create=False nothing is
+    made: an existing directory is returned or "".
+    """
+    d = os.environ.get("RETRO_HUD_CACHE_DIR", "")
+    home = os.environ.get("HOME", "")
+    cands = [d] if d else ([os.path.join(home, ".cache", "retro-hud")] if home else [])
+    if not d and hasattr(os, "getuid"):
+        cands.append("/tmp/retro-hud-{}".format(os.getuid()))
+    for c in cands:
+        try:
+            if create:
+                os.makedirs(c, 0o700, exist_ok=True)
+            elif not os.path.isdir(c):
+                continue
+            if c.startswith("/tmp/") and os.stat(c).st_uid != os.getuid():
+                continue  # someone else's directory: never use it
+            return c
+        except OSError:
+            continue
+    return ""
+
+
+def _read_json(path):
+    try:
+        with open(path) as f:
+            obj = json.loads(f.read(65536))
+        return obj if isinstance(obj, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _clean(text):
+    return "".join(ch for ch in str(text) if ch.isprintable()).strip()
+
+
+def newest_event(events, now):
+    """Text of the newest unexpired events-channel entry, or ""."""
+    for e in reversed(events):
+        ts = _num_or_none(e.get("ts"))
+        ttl = _num_or_none(e.get("ttl"))
+        text = e.get("text")
+        if ts is None or not isinstance(text, str):
+            continue
+        ttl = EVENT_TTL_S if ttl is None else ttl
+        if ts - 5 <= now < ts + ttl and _clean(text):
+            return _clean(text)
+    return ""
+
+
+def next_bubble(prev, snap, now, event="", name="", quips=True):
+    """(bubble text, state-file updates) for this refresh.
+
+    Priority: the events channel → a state-change bubble (once per
+    transition, STATE_BUBBLE_S) → a rare idle quip → an ambient z / zZ
+    while dozing. Muted (mute_until in the future) → nothing at all.
+    """
+    upd = {}
+    state = snap["state"]
+    pstate = prev.get("state")
+    said = None
+    if pstate is not None:  # the first sighting is not a transition
+        if state != pstate and state == "error":
+            said = "hm."
+        elif state != pstate and state == "needs":
+            said = "need you"
+        elif (_num_or_none(prev.get("ctx_pct")) or 0) < RED_PCT <= snap["ctx_pct"]:
+            said = "compact?"
+        elif (_num_or_none(prev.get("limit_pct")) or 0) < WARN_PCT <= snap["limit_pct"]:
+            said = "limit soon"
+        elif state != pstate and state == "yours":
+            said = "ready"
+    bubble = prev.get("bubble") if isinstance(prev.get("bubble"), dict) else None
+    if said:
+        bubble = {"text": (name + ": " if name else "") + said,
+                  "until": now + STATE_BUBBLE_S}
+    if bubble and not (_num_or_none(bubble.get("until")) or 0) > now:
+        bubble = None
+    last_quip = _num_or_none(prev.get("last_quip")) or 0
+    if bubble is None and not event and quips and state == "idle" \
+            and now - last_quip >= QUIP_EVERY_S:
+        bubble = {"text": QUIPS[int(now // QUIP_EVERY_S) % len(QUIPS)],
+                  "until": now + STATE_BUBBLE_S}
+        upd["last_quip"] = now
+    upd["bubble"] = bubble
+    if (_num_or_none(prev.get("mute_until")) or 0) > now:
+        return "", upd
+    text = event or (bubble or {}).get("text") or \
+        {"idle": "z", "asleep": "zZ"}.get(state, "")
+    return trunc(_clean(text), BUBBLE_MAX), upd
+
+
+def _prune(d, now, keep):
+    try:
+        for n in os.listdir(d):
+            if n.endswith(_CACHE_SUFFIXES) and not n.startswith(keep):
+                p = os.path.join(d, n)
+                try:
+                    if os.path.getmtime(p) < now - PRUNE_AGE_S:
+                        os.remove(p)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def _write_json(path, obj):
+    tmp = "{}.{}.tmp".format(path, os.getpid())
+    try:
+        with open(tmp, "w") as f:
+            json.dump(obj, f)
+        os.replace(tmp, path)
+        return True
+    except (OSError, TypeError, ValueError):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
+    """Agent presence for this refresh: {"mood", "bubble", "since",
+    "sprite"}, or None for the plain gauge alien (presence off, or the
+    agent's state is unknown). Never raises; any IO failure degrades to
+    no bubble."""
+    if os.environ.get("RETRO_HUD_PRESENCE", "1") == "0":
+        return None
+    idle_s = (num(os.environ.get("RETRO_HUD_IDLE_MIN")) or IDLE_S // 60) * 60
+    sleep_s = (num(os.environ.get("RETRO_HUD_SLEEP_MIN")) or SLEEP_S // 60) * 60
+    path = data.get("transcript_path")
+    entries = tail_entries(path)[0] if isinstance(path, str) and path else []
+    state, since = agent_state(entries, now, idle_s, sleep_s)
+    sid = data.get("session_id")
+    sid = sid if isinstance(sid, str) and _SID_RE.fullmatch(sid) else ""
+    if sid:  # the hooks layer, if installed, knows what the transcript can't
+        d = cache_dir(create=False)
+        if d:
+            state, since = merge_hooks(state, since,
+                                       read_hooks(os.path.join(d, sid + ".hooks.jsonl")),
+                                       now, idle_s, sleep_s)
+    if state == "unknown":
+        return None
+    sprite = os.environ.get("RETRO_HUD_SPRITE", "alien")
+    bubble = ""
+    d = cache_dir() if sid else ""
+    if d:
+        sp = os.path.join(d, sid + ".state.json")
+        prev = _read_json(sp)
+        if prev.get("sprite") in SPRITES:
+            sprite = prev["sprite"]
+        snap = {"state": state, "since": since, "ctx_pct": ctx_pct,
+                "limit_pct": limit_pct, "cost": cost}
+        event = newest_event(_tail_lines(os.path.join(d, sid + ".events.jsonl"), 16384), now)
+        name = _clean(os.environ.get("RETRO_HUD_AGENT_NAME", ""))
+        quips = os.environ.get("RETRO_HUD_QUIPS", "1") != "0"
+        text, upd = next_bubble(prev, snap, now, event, name, quips)
+        rec = dict(prev)
+        rec.update(snap)
+        rec.update(upd)
+        rec["updated"] = now
+        if now - (_num_or_none(prev.get("last_prune")) or 0) >= PRUNE_EVERY_S:
+            _prune(d, now, sid + ".")
+            rec["last_prune"] = now
+        if _write_json(sp, rec):
+            bubble = text
+    return {"mood": pick_mood(gauge_pct, state), "bubble": bubble,
+            "since": since, "sprite": sprite}
+
+
 # ── row assembly ──
 def _join(prefix, segs):
     return prefix + SEP.join(s for s in segs if s)
@@ -860,13 +1110,17 @@ def render(data, cols, now):
         else:
             rl_rich = False
 
-    alien_pct = None
+    alien_pct = pres = None
     if os.environ.get("RETRO_HUD_ALIEN", "1") != "0":
-        alien_pct = max(clamp(ctx_pct, 0, 100),
-                        clamp(rl5_pct, 0, 100) if has_rl else 0,
-                        clamp(rl7_pct, 0, 100) if has_rl else 0)
+        limit_pct = max(clamp(rl5_pct, 0, 100), clamp(rl7_pct, 0, 100)) if has_rl else 0
+        alien_pct = max(clamp(ctx_pct, 0, 100), limit_pct)
+        try:
+            pres = presence(data, now, alien_pct, clamp(ctx_pct, 0, 100),
+                            limit_pct, round(cost, 2))
+        except Exception:  # presence is decoration: never cost the bar
+            pres = None
 
-    return [_frame(row1, cols, "┐", frame_on, alien_pct, now),
+    return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres),
             _frame(row2, cols, "┘", frame_on)]
 
 
