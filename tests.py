@@ -946,6 +946,123 @@ class TestHandlerActions(ShellHarness):
         self.assertEqual(len(self.tmux_calls("display-menu")), 1)
 
 
+class TestHandlerInstall(ShellHarness):
+    DESKTOP = os.path.join(".local", "share", "applications", "retro-hud-url-handler.desktop")
+
+    def sh(self, script, *args, **extra):
+        env = self.env(extra)
+        env["PATH"] = self.bin + ":" + env["PATH"]   # fakes first; real python3 stays reachable
+        return subprocess.run(["bash", os.path.join(REPO, script)] + list(args), env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+
+    def path(self, rel):
+        return os.path.join(self.home, rel)
+
+    def read(self, rel):
+        with open(self.path(rel)) as f:
+            return f.read()
+
+    def mime_owner(self):
+        p = self.path(".fake-mime")
+        return open(p).read() if os.path.exists(p) else ""
+
+    def test_handler_only_installs_and_registers(self):
+        p = self.sh("install.sh", "--handler-only")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        dest = self.path(".claude/retro-hud-handler.sh")
+        self.assertEqual(self.read(".claude/retro-hud-handler.sh"), open(HANDLER).read())
+        self.assertTrue(os.access(dest, os.X_OK))
+        desktop = self.read(self.DESKTOP)
+        self.assertIn('Exec="{}" %u'.format(dest), desktop)
+        self.assertIn("MimeType=x-scheme-handler/retro-hud;", desktop)
+        self.assertEqual(self.mime_owner(), "retro-hud-url-handler.desktop")
+        self.assertTrue(self.log("update-desktop-database"))
+        # statusline untouched
+        self.assertFalse(os.path.exists(self.path(".claude/statusline.py")))
+        self.assertFalse(os.path.exists(self.path(".claude/settings.json")))
+        # settings file: commented defaults only, so it changes nothing
+        cfg = self.read(".config/retro-hud/env")
+        self.assertIn("# RETRO_HUD_MODELS=opus,sonnet,haiku", cfg)
+        self.assertIn("# RETRO_HUD_USAGE_URL=https://claude.ai/settings/usage", cfg)
+        self.assertTrue(all(not l.strip() or l.startswith("#") for l in cfg.splitlines()))
+        out = p.stdout.decode()
+        self.assertIn('set -as terminal-features "xterm*:hyperlinks"', out)
+        self.assertIn("RETRO_HUD_ACTIONS=1", out)
+
+    def test_no_hyperlink_hint_when_tmux_has_it(self):
+        p = self.sh("install.sh", "--handler-only",
+                    FAKE_TMUX_FEATURES="terminal-features[2] xterm*:hyperlinks")
+        self.assertNotIn("terminal-features", p.stdout.decode())
+
+    def test_existing_scheme_owner_is_left_alone(self):
+        with open(self.path(".fake-mime"), "w") as f:
+            f.write("someone-else.desktop")
+        p = self.sh("install.sh", "--handler-only")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertIn("someone-else.desktop", p.stdout.decode())
+        self.assertEqual(self.mime_owner(), "someone-else.desktop")
+        self.assertFalse(os.path.exists(self.path(self.DESKTOP)))
+        self.assertNotIn(["default", "retro-hud-url-handler.desktop", "x-scheme-handler/retro-hud"],
+                         self.log("xdg-mime"))
+        self.assertTrue(os.path.exists(self.path(".claude/retro-hud-handler.sh")))
+
+    def test_rerun_keeps_user_settings(self):
+        self.sh("install.sh", "--handler-only")
+        self.write_config("RETRO_HUD_MODELS=fable\n")
+        p = self.sh("install.sh", "--handler-only")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.read(".config/retro-hud/env"), "RETRO_HUD_MODELS=fable\n")
+
+    def test_handler_flag_also_installs_statusline(self):
+        p = self.sh("install.sh", "--handler")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        for rel in (".claude/statusline.py", ".claude/settings.json",
+                    ".claude/retro-hud-handler.sh", self.DESKTOP):
+            self.assertTrue(os.path.exists(self.path(rel)), rel)
+
+    def test_plain_install_registers_nothing(self):
+        p = self.sh("install.sh")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertTrue(os.path.exists(self.path(".claude/statusline.py")))
+        self.assertFalse(os.path.exists(self.path(".claude/retro-hud-handler.sh")))
+        self.assertFalse(os.path.exists(self.path(self.DESKTOP)))
+        self.assertEqual(self.log("xdg-mime"), [])
+
+    def mimeapps(self, text=None):
+        p = self.path(".config/mimeapps.list")
+        if text is not None:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(text)
+        return open(p).read()
+
+    def test_uninstall_round_trip(self):
+        self.sh("install.sh", "--handler")
+        # what a real xdg-mime writes
+        self.mimeapps("[Default Applications]\nx-scheme-handler/retro-hud="
+                      "retro-hud-url-handler.desktop\ntext/plain=editor.desktop\n")
+        p = self.sh("uninstall.sh")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        for rel in (".claude/statusline.py", ".claude/retro-hud-handler.sh", self.DESKTOP):
+            self.assertFalse(os.path.exists(self.path(rel)), rel)
+        self.assertEqual(self.mimeapps(),
+                         "[Default Applications]\ntext/plain=editor.desktop\n")
+        self.assertTrue(os.path.exists(self.path(".config/retro-hud/env")))  # user settings kept
+        self.assertIn("retro-hud/env", p.stdout.decode())
+
+    def test_uninstall_leaves_a_foreign_desktop_entry(self):
+        os.makedirs(os.path.dirname(self.path(self.DESKTOP)))
+        foreign = "[Desktop Entry]\nExec=/opt/other/handler %u\n"
+        with open(self.path(self.DESKTOP), "w") as f:
+            f.write(foreign)
+        self.mimeapps("[Default Applications]\nx-scheme-handler/retro-hud="
+                      "retro-hud-url-handler.desktop\n")
+        p = self.sh("uninstall.sh")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.read(self.DESKTOP), foreign)
+        self.assertIn("x-scheme-handler/retro-hud=", self.mimeapps())
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")
