@@ -1085,6 +1085,113 @@ class TestHandlerActions(ShellHarness):
         self.assertEqual(len(self.tmux_calls("display-menu")), 1)
 
 
+class TestHandlerInBinding(ShellHarness):
+    """Inside a tmux right-click binding: RETRO_HUD_MENU_FILE and RETRO_HUD_CLIENT.
+    A display-menu run by the handler itself has no mouse event, so tmux 3.4 makes it a
+    keyboard menu that the right button's own release closes. The binding therefore runs
+    the handler synchronously, the handler writes the menu as one line, and the binding
+    source-files it with the press's event (fixed 2026-10-23)."""
+
+    def setUp(self):
+        super().setUp()
+        self.menu_file = os.path.join(self.tmp, "menu-_dev_pts_3.tmux")
+
+    def bound(self, *args, **extra):
+        extra.setdefault("RETRO_HUD_MENU_FILE", self.menu_file)
+        extra.setdefault("RETRO_HUD_CLIENT", "/dev/pts/3")
+        return self.run_handler(*args, **extra)
+
+    def test_menu_is_written_for_the_binding_not_shown(self):
+        p = self.bound(self.url("ctx"))
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.tmux_calls("display-menu"), [], "the binding runs it, not the handler")
+        with open(self.menu_file) as f:
+            line = f.read()
+        self.assertEqual(line.count("\n"), 1)
+        self.assertTrue(line.startswith(
+            "display-menu -O -c '/dev/pts/3' -T 'context (types into the composer)' -x M -y '#{popup_mouse_y}' -- "), line)
+        self.assertIn(" '/compact' 'c' 'run-shell -b \"'\\''", line)   # items quoted, quotes inside escaped
+        self.assertIn("confirm-clear '\\''%7'\\''", line)
+
+    def test_bound_client_is_the_menus_client(self):
+        self.bound(self.url("effort", cur="high"), RETRO_HUD_CLIENT="/dev/pts/9")
+        self.assertEqual(self.tmux_calls("list-clients"), [], "the binding named the client")
+        with open(self.menu_file) as f:
+            self.assertIn("display-menu -O -c '/dev/pts/9' ", f.read())
+        active = [c for c in self.tmux_calls("display") if "-c" in c]
+        self.assertEqual(active, [["display", "-p", "-c", "/dev/pts/9", "#{pane_id}"]])
+
+    def test_a_non_menu_action_removes_a_stale_file(self):
+        with open(self.menu_file, "w") as f:
+            f.write("display-menu stale\n")
+        self.bound(self.url("cost"))
+        self.assertFalse(os.path.exists(self.menu_file), "nothing left for source-file to run")
+        self.assertEqual(self.tmux_calls("send-keys")[0], ["send-keys", "-t", "%7", "-l", "/cost"])
+
+    def test_malformed_variables_are_ignored(self):
+        self.bound(self.url("ctx"), RETRO_HUD_MENU_FILE=os.path.join(self.tmp, "m;rm.tmux"), RETRO_HUD_CLIENT="pts3")
+        client, title, items = self.menu()      # shown directly, on the newest client
+        self.assertEqual(client, "/dev/pts/3")
+        self.assertIn("RETRO_HUD_MENU_FILE ignored", self.handler_log())
+        self.assertIn("RETRO_HUD_CLIENT ignored", self.handler_log())
+
+    def test_diff_is_detached_so_the_binding_never_waits(self):
+        import time
+        t0 = time.time()
+        p = self.bound(self.url("diff"))
+        self.assertLess(time.time() - t0, 5)
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        for _ in range(50):            # the detached copy runs the popup
+            if self.tmux_calls("display-popup"):
+                break
+            time.sleep(0.1)
+        self.assertEqual(len(self.tmux_calls("display-popup")), 1, self.log("tmux"))
+
+    @unittest.skipUnless(shutil.which("tmux"), "needs a real tmux")
+    def test_menu_line_parses_in_a_real_tmux(self):
+        # the whole line through tmux's own parser: every token comes back verbatim
+        self.bound(self.url("ctx"))
+        with open(self.menu_file) as f:
+            line = f.read().strip()
+        import shlex
+        tokens = shlex.split(line)     # the quoting is shell-compatible by construction
+        quoted = quoted_tokens(line)
+        self.assertEqual(len(quoted), len(tokens))
+        probe = os.path.join(self.tmp, "probe.tmux")
+        with open(probe, "w") as f:
+            f.write("\n".join("set -g @t%d %s" % (i, q) for i, q in enumerate(quoted)) + "\n")
+        sock = os.path.join(self.tmp, "sock")
+        subprocess.run(["tmux", "-S", sock, "-f", "/dev/null", "new-session", "-d", ";", "source-file", probe],
+                       capture_output=True, timeout=20)
+        got = [subprocess.run(["tmux", "-S", sock, "display", "-p", "#{@t%d}" % i],
+                              capture_output=True, text=True, timeout=20).stdout[:-1] for i in range(len(tokens))]
+        subprocess.run(["tmux", "-S", sock, "kill-server"], capture_output=True)
+        self.assertEqual(got, tokens)
+
+
+def quoted_tokens(line):
+    """Split a tmux command line into its quoted tokens, keeping each token's quoting."""
+    out, cur, q = [], "", False
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "'" and line[i:i + 4] != "'\\''":
+            q = not q
+            cur += ch
+        elif ch == "'" and line[i:i + 4] == "'\\''":
+            cur += "'\\''"
+            i += 3
+        elif ch == " " and not q:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+        i += 1
+    if cur:
+        out.append(cur)
+    return out
+
+
 class TestHandlerAgent(ShellHarness):
     """The `agent` action: a menu that talks to the HUD through its cache
     files, found via the pane → session map the HUD writes."""

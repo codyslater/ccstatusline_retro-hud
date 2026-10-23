@@ -7,6 +7,18 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 ## [v3.0.0] — 2026-10-22
 
 ### Fixed
+- **Menus closed on the right button's release, and ignored mouse clicks.**
+  A `display-menu` the handler runs from outside a key binding has no
+  mouse event, and tmux 3.4 then makes it a keyboard-only menu that any
+  other mouse button closes — the release of the right-click that opened
+  it, a few ms later (`-O` never applied). Inside a tmux right-click
+  binding the handler now receives `RETRO_HUD_MENU_FILE` and writes its
+  menu there as one `display-menu` line; the binding `source-file`s it,
+  so the menu runs with the click's mouse event: it opens at the pointer
+  (above it, so the release lands outside), takes clicks, and a press
+  outside, Esc or q closes it. README, "Right-click in tmux", has the
+  binding. `RETRO_HUD_CLIENT` from the binding names the clicking client.
+  Through Ctrl+click and the desktop handler nothing changes.
 - `install.sh --hooks-only` registers the presence hooks and touches nothing
   else, for an install whose `statusline.py` or `statusline-command.sh`
   carries local edits (a plain install, `--hooks` or `--handler` included,

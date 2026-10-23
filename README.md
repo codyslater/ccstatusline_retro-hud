@@ -354,6 +354,27 @@ platform's tool so it runs `retro-hud-handler.sh <url>`.
 Without `RETRO_HUD_ACTIONS=1` the HUD renders exactly as before. Outside
 tmux only the usage links appear — there's no session to type into.
 
+**Right-click in tmux** (3.4+, `mouse on`). If your terminal hands the
+right button to tmux, bind it so a right-click on a HUD link opens the
+menu *at the pointer*, taking mouse clicks, without Ctrl:
+
+```tmux
+bind-key -T root MouseDown3Pane if-shell -F '#{mouse_hyperlink}' {
+  run-shell "RETRO_HUD_CLIENT=#{q:client_tty} RETRO_HUD_MENU_FILE=$HOME/.cache/retro-hud/menu-#{s|/|_|:client_tty}.tmux $HOME/.claude/retro-hud-handler.sh #{q:mouse_hyperlink}"
+  source-file -Fq "$HOME/.cache/retro-hud/menu-#{s|/|_|:client_tty}.tmux"
+} { paste-buffer -p }
+```
+
+The binding runs the handler first, synchronously: told the menu file,
+the handler writes its menu there as one `display-menu` line instead of
+showing it, and the binding sources that file next, so the menu runs
+inside the binding with the click's mouse event. That matters: a menu a
+script opens from outside has no mouse event, and tmux then makes it
+keyboard-only and closes it on the right button's own release. The
+second branch is what a right-click does elsewhere (here: paste). Through
+Ctrl+click and the desktop handler the menus still work, centred and
+driven by their keys (Esc or q closes).
+
 **Settings.** The handler is launched by your desktop, not your shell, so
 it never sees your shell's exports. It reads `RETRO_HUD_MODELS` (default
 `opus,sonnet,haiku`) and `RETRO_HUD_USAGE_URL` (default
@@ -381,6 +402,13 @@ retro-hud://<action>?pane=<tmux pane id>[&sock=<tmux socket path>]
 `cur=<level>` so the menu can mark the current level. `usage` links have
 no query outside tmux. Unknown keys are ignored, so you can write your
 own handler against this contract.
+
+Inside the right-click binding the handler also receives
+`RETRO_HUD_CLIENT` (the clicking client's tty, which the menu and the
+active-pane check use) and `RETRO_HUD_MENU_FILE` (an absolute `.tmux`
+path; the handler removes it, writes a menu action's line there, and
+detaches the diff popup so the binding never waits). Both are validated
+and ignored when malformed.
 
 The reference handler treats every URL as untrusted — any program can
 print a link: it accepts only the whitelist above, validates each value,

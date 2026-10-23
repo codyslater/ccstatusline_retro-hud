@@ -30,6 +30,21 @@
 #   RETRO_HUD_CACHE_DIR   the HUD's presence cache, if you moved it
 #                         (default ~/.cache/retro-hud)
 #
+# Inside a tmux right-click binding (README, "Right-click in tmux") the
+# binding runs this script synchronously with two more variables:
+#   RETRO_HUD_CLIENT     the clicking client's tty (the menu's -c)
+#   RETRO_HUD_MENU_FILE  an absolute <path>.tmux: this script removes it,
+#                        then a menu action WRITES its one `display-menu`
+#                        line there instead of running it; the binding
+#                        `source-file`s it next, so the menu runs with the
+#                        press's mouse event — it opens at the pointer,
+#                        takes clicks, and survives the button's release.
+#                        (A menu run from outside the binding has no mouse
+#                        event; tmux 3.4 then makes it keyboard-only and
+#                        the right button's own release closes it.)
+# A slow action (the diff popup) is detached when that variable is set,
+# so the binding never waits on it.
+#
 # Extension point: if ~/.claude/retro-hud-handler.local.sh exists it is
 # sourced first, with the same arguments; it may handle anything itself
 # and `exit`, otherwise the built-in actions below run.
@@ -107,25 +122,69 @@ if ! [[ $USAGE_URL =~ ^https?://[^[:space:][:cntrl:]]+$ ]]; then
     USAGE_URL=$DEFAULT_USAGE_URL
 fi
 
+# ── the right-click binding's two variables (see the header) ──
+MENU_FILE=""
+if [ -n "${RETRO_HUD_MENU_FILE:-}" ]; then
+    if [[ $RETRO_HUD_MENU_FILE =~ ^/[A-Za-z0-9._/-]+\.tmux$ ]]; then
+        MENU_FILE=$RETRO_HUD_MENU_FILE
+        rm -f "$MENU_FILE"    # a stale menu must never be sourced again
+    else
+        log "RETRO_HUD_MENU_FILE ignored: not a plain absolute .tmux path"
+    fi
+fi
+BOUND_CLIENT=""
+if [ -n "${RETRO_HUD_CLIENT:-}" ]; then
+    if [[ $RETRO_HUD_CLIENT =~ ^/dev/[A-Za-z0-9/._-]+$ ]]; then
+        BOUND_CLIENT=$RETRO_HUD_CLIENT
+    else
+        log "RETRO_HUD_CLIENT ignored: not a tty path"
+    fi
+fi
+
 # ── tmux helpers ──
 SOCK=""
 tm() {
     if [ -n "$SOCK" ]; then tmux -S "$SOCK" "$@"; else tmux "$@"; fi
 }
 
-# The handler has no $TMUX: the clicking client is the attached client
-# with the newest activity.
+# The handler has no $TMUX: the clicking client is the one the binding
+# named, else the attached client with the newest activity.
 newest_client() {
     tm list-clients -F '#{client_activity} #{client_tty}' 2>/dev/null |
         sort -rn | head -n 1 | cut -d' ' -f2-
 }
 
 need_client() {
+    if [ -n "$BOUND_CLIENT" ]; then
+        CLIENT=$BOUND_CLIENT
+        return 0
+    fi
     CLIENT=$(newest_client) || CLIENT=""
     if [ -z "$CLIENT" ]; then
         log "no tmux client found (is the tmux server running?)"
         exit 0
     fi
+}
+
+# One token for tmux's command parser: single quotes keep it literal (no
+# comment, no $ or ~ expansion, no escapes); a quote inside ends the
+# token, escapes one quote and reopens, as in the shell.
+tmq() {
+    printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
+# A menu for the binding to run: one display-menu line in the menu file.
+write_menu_file() {  # title, then name/key/command triples
+    local title=$1 a
+    shift
+    {
+        printf "display-menu -O -c %s -T %s -x M -y '#{popup_mouse_y}' --" "$(tmq "$CLIENT")" "$(tmq "$title")"
+        for a in "$@"; do printf ' %s' "$(tmq "$a")"; done
+        printf '\n'
+    } >"$MENU_FILE.tmp" && mv -f "$MENU_FILE.tmp" "$MENU_FILE" || {
+        rm -f "$MENU_FILE.tmp"
+        log "menu file write failed: $MENU_FILE"
+    }
 }
 
 # A menu item re-enters this script; every token is pre-validated, so the
@@ -148,9 +207,16 @@ show_menu() {  # title, then name/key/command triples
         exit 0
     fi
     need_client
-    # -O: keep the menu open when the mouse button is RELEASED outside it. A menu opened by a
-    # right-click press (tmux's mouse_hyperlink binding) would otherwise be dismissed by the
-    # matching release a few ms later. A later press outside, Esc or q still closes it.
+    if [ -n "$MENU_FILE" ]; then
+        # The binding sources this line next, inside its own command chain, so the menu has
+        # the press's mouse event: -x M centres it on the pointer and -y '#{popup_mouse_y}'
+        # (the row below the box) stands it ABOVE the pointer, where the button's release
+        # lands outside it (-O: a release outside is ignored; a press outside, Esc, q close).
+        write_menu_file "$title" "$@"
+        return 0
+    fi
+    # No binding behind this click (a Ctrl+click through the desktop): run it here. Without
+    # a mouse event tmux makes this a keyboard menu (keys, Esc, q); it waits while it is up.
     tm display-menu -O -c "$CLIENT" -x C -y C -T "$title" "$@" || log "display-menu failed"
 }
 
@@ -511,6 +577,10 @@ case $ACTION in
             "/clear…" l "$(menu_cmd confirm-clear "$PANE")"
         ;;
     diff)
+        if [ -n "$MENU_FILE" ]; then   # inside the binding: the popup waits, the chain must not
+            ( RETRO_HUD_MENU_FILE="" exec "$SELF" "$URL" ) </dev/null >/dev/null 2>&1 &
+            exit 0
+        fi
         dir=$(tm display -p -t "$PANE" '#{pane_current_path}' 2>/dev/null) || dir=""
         if ! [[ $dir == /* && $dir != *[[:cntrl:]]* ]] || ! [ -d "$dir" ]; then
             log "diff: pane $PANE has no usable directory"
