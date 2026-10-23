@@ -594,7 +594,8 @@ EVENT_TTL_S = 30           # default lifetime of an events-channel bubble
 QUIP_EVERY_S = 20 * 60     # at most one idle quip per this many seconds
 PRUNE_AGE_S = 7 * 86400    # cache files untouched this long are removed
 PRUNE_EVERY_S = 3600
-_CACHE_SUFFIXES = (".state.json", ".events.jsonl", ".hooks.jsonl")
+_CACHE_SUFFIXES = (".state.json", ".events.jsonl", ".hooks.jsonl", ".sid")
+WAVE_EVENT = "wave"        # events-channel text that makes the sprite wave
 _SID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 QUIPS = ("all quiet.", "systems nominal", "standing by", "scanning sector 7",
          "orbit stable", "insert coin", "beep boop", "0 bogeys on scope",
@@ -704,7 +705,7 @@ def _clean(text):
 
 
 def newest_event(events, now):
-    """Text of the newest unexpired events-channel entry, or ""."""
+    """(text, ts) of the newest unexpired events-channel entry, or ("", None)."""
     for e in reversed(events):
         ts = _num_or_none(e.get("ts"))
         ttl = _num_or_none(e.get("ttl"))
@@ -713,8 +714,8 @@ def newest_event(events, now):
             continue
         ttl = EVENT_TTL_S if ttl is None else ttl
         if ts - 5 <= now < ts + ttl and _clean(text):
-            return _clean(text)
-    return ""
+            return _clean(text), ts
+    return "", None
 
 
 def next_bubble(prev, snap, now, event="", name="", quips=True):
@@ -812,6 +813,7 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
         return None
     sprite = os.environ.get("RETRO_HUD_SPRITE", "alien")
     bubble = ""
+    wave_since = None
     d = cache_dir() if sid else ""
     if d:
         sp = os.path.join(d, sid + ".state.json")
@@ -820,7 +822,10 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
             sprite = prev["sprite"]
         snap = {"state": state, "since": since, "ctx_pct": ctx_pct,
                 "limit_pct": limit_pct, "cost": cost}
-        event = newest_event(_tail_lines(os.path.join(d, sid + ".events.jsonl"), 16384), now)
+        event, ets = newest_event(
+            _tail_lines(os.path.join(d, sid + ".events.jsonl"), 16384), now)
+        if event == WAVE_EVENT:  # a gesture, not words: wave instead
+            event, wave_since = "", ets
         name = _clean(os.environ.get("RETRO_HUD_AGENT_NAME", ""))
         quips = os.environ.get("RETRO_HUD_QUIPS", "1") != "0"
         text, upd = next_bubble(prev, snap, now, event, name, quips)
@@ -833,8 +838,38 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
             rec["last_prune"] = now
         if _write_json(sp, rec):
             bubble = text
-    return {"mood": pick_mood(gauge_pct, state), "bubble": bubble,
-            "since": since, "sprite": sprite}
+            _map_pane(d, sid)
+    mood = pick_mood(gauge_pct, state)
+    if wave_since is not None and mood not in ("red", "error", "agitated"):
+        mood, since = "yours", wave_since  # waves in place for the event's ttl
+    return {"mood": mood, "bubble": bubble, "since": since, "sprite": sprite}
+
+
+def _map_pane(d, sid):
+    """With click actions on inside tmux, record which session this pane
+    shows (<cache>/pane-<N>.sid holds the session id) so the handler's
+    agent menu can find the state and events files. Rewritten only when
+    it changes; best effort."""
+    pane = os.environ.get("TMUX_PANE", "")
+    if os.environ.get("RETRO_HUD_ACTIONS") != "1" or not _PANE_RE.match(pane):
+        return
+    path = os.path.join(d, "pane-{}.sid".format(pane[1:]))
+    try:
+        with open(path) as f:
+            if f.read(256) == sid:
+                return
+    except OSError:
+        pass
+    tmp = "{}.{}.tmp".format(path, os.getpid())
+    try:
+        with open(tmp, "w") as f:
+            f.write(sid)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 # ── row assembly ──
@@ -878,7 +913,8 @@ def _place_bubble(pos, span, text, moving_right):
     return (side, out) if out else (0, "")
 
 
-def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None):
+def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None,
+           action=None):
     """Pad with a dim rule and close the frame at the right edge.
 
     When alien_pct is given (and the rule is long enough), a text-art
@@ -891,6 +927,9 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None):
     and speed from SPRITES / MOOD_SPEEDS / MOOD_COLORS, and a bubble is
     drawn on the rule beside the sprite, in its travel direction. The
     bubble takes rule cells, never adds any: the frame math is unchanged.
+
+    `action` (from make_action) wraps the sprite, not its bubble, in the
+    retro-hud://agent link; links are invisible, so nothing moves.
     """
     gap = cols - vislen(row)
     if not frame_on or gap < 2:
@@ -925,7 +964,7 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None):
         right = "─" * (span - pos - bw if side == 1 else span - pos)
         if side == -1:
             left += R + BUBBLE + bubble + R + RULE + "╶"
-        mid = R + color + sprite + R + RULE
+        mid = R + color + (action("agent", sprite) if action else sprite) + R + RULE
         if side == 1:
             mid += "╴" + R + BUBBLE + bubble + R + RULE
         fill = left + mid + right
@@ -1191,7 +1230,7 @@ def render(data, cols, now):
         except Exception:  # presence is decoration: never cost the bar
             pres = None
 
-    return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres),
+    return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres, action),
             _frame(row2, cols, "┘", frame_on)]
 
 

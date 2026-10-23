@@ -508,7 +508,11 @@ class TestClickActionLinks(unittest.TestCase):
         self.assertEqual((row, url), (1, "retro-hud://usage?" + self.Q))
         self.assertIn("63%", text)
         self.assertIn("81% · 3d", text)
-        self.assertEqual(set(found), {"model", "effort", "ctx", "cost", "diff", "usage"})
+        (row, url, text), = found["agent"]  # the alien on the top rule
+        self.assertEqual((row, url), (0, "retro-hud://agent?" + self.Q))
+        self.assertIn(text, [f for pair in sl.ALIEN_FRAMES for f in pair])
+        self.assertEqual(set(found),
+                         {"model", "effort", "ctx", "cost", "diff", "usage", "agent"})
 
     def test_branch_and_pr_keep_their_web_links(self):
         os.environ["RETRO_HUD_ACTIONS"] = "1"
@@ -1515,6 +1519,107 @@ class TestPresenceRender(PresenceCase):
         for banned in ("subprocess.", "os.system(", "os.popen(", "os.exec", "os.spawn",
                        "os.fork("):
             self.assertNotIn(banned, src)
+
+
+class TestAgentLink(PresenceCase):
+    """With click actions on, the sprite (never its bubble) links to the
+    agent menu, and the HUD maps the tmux pane to its session id."""
+    ENV = ("RETRO_HUD_ACTIONS", "TMUX_PANE", "TMUX")
+
+    def setUp(self):
+        super().setUp()
+        self._saved_env = {k: os.environ.pop(k, None) for k in self.ENV}
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        super().tearDown()
+
+    def actions_on(self, pane="%7"):
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        os.environ["TMUX_PANE"] = pane
+        os.environ["TMUX"] = "/tmp/tmux-1000/default,4242,0"
+
+    def agent_links(self, row):
+        return re.findall(r"\x1b\]8;;(retro-hud://agent[^\x07]*)\x07(.*?)\x1b\]8;;\x07", row)
+
+    def test_sprite_is_linked_and_the_bubble_is_not(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW, "text": "deploy finished", "ttl": 600})
+        self.actions_on()
+        row = sl.render(self.payload(), 160, NOW)[0]
+        (url, text), = self.agent_links(row)
+        self.assertEqual(url, "retro-hud://agent?pane=%257&sock=/tmp/tmux-1000/default")
+        self.assertIn(sl.strip_ansi(text), sl.SPRITES["alien"]["working"])
+        self.assertIn("deploy finished", sl.strip_ansi(row))
+        self.assertNotIn("deploy", "".join(t for _, t in self.agent_links(row)))
+
+    def test_no_agent_link_outside_tmux_or_when_off(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.assertEqual(self.agent_links(sl.render(self.payload(), 160, NOW)[0]), [])
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        self.assertEqual(self.agent_links(sl.render(self.payload(), 160, NOW)[0]), [])
+
+    def test_links_never_change_the_top_rule(self):
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW - 1, "text": "deploy finished", "ttl": 600})
+        self.actions_on()
+        for payload in (MINIMAL, FULL, OVERLOAD):
+            for cols in range(50, 241, 10):
+                for t in (NOW, NOW + 10, NOW + 30):
+                    os.environ["RETRO_HUD_ACTIONS"] = "0"
+                    plain = [sl.strip_ansi(r) for r in sl.render(self.payload(payload), cols, t)]
+                    os.environ["RETRO_HUD_ACTIONS"] = "1"
+                    rows = sl.render(self.payload(payload), cols, t)
+                    self.assertEqual([sl.strip_ansi(r) for r in rows], plain, (cols, t))
+                    self.assertEqual(sl.vislen(rows[0]), sl.vislen(plain[0]))
+
+    def test_pane_to_session_map_written_with_actions_on(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW)
+        self.assertFalse(os.path.exists(os.path.join(self.cache, "pane-12.sid")))
+        self.actions_on("%12")
+        self.row1(NOW)
+        with open(os.path.join(self.cache, "pane-12.sid")) as f:
+            self.assertEqual(f.read(), self.SID)
+        # a new session in the same pane takes the map over
+        self.row1(NOW + 1, sid="another-session")
+        with open(os.path.join(self.cache, "pane-12.sid")) as f:
+            self.assertEqual(f.read(), "another-session")
+
+    def test_no_map_for_a_malformed_pane(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.actions_on("%1/../x")
+        self.row1(NOW)
+        self.assertEqual([n for n in os.listdir(self.cache) if n.startswith("pane-")], [])
+
+    def test_wave_event_waves_instead_of_speaking(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.row1(NOW - 1)
+        self.events({"ts": NOW, "text": "wave", "ttl": 10})
+        waving = set(sl.SPRITES["alien"]["yours"])
+        for t in (NOW, NOW + 5, NOW + 9):
+            plain = self.row1(t)
+            self.assertTrue(any(f in plain for f in waving), (t, plain))
+            self.assertNotIn("wave", plain)
+        plain = self.row1(NOW + 10)  # expired: back to work
+        self.assertFalse(any(f in plain for f in waving), plain)
+        self.assertTrue(any(f in plain for f in sl.SPRITES["alien"]["working"]), plain)
+
+    def test_wave_uses_the_chosen_sprite_set(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.put_state(sprite="robot")
+        self.events({"ts": NOW, "text": "wave", "ttl": 10})
+        plain = self.row1(NOW + 1)
+        self.assertTrue(any(f in plain for f in sl.SPRITES["robot"]["yours"]), plain)
+
+    def test_red_gauge_still_beats_a_wave(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW, "text": "wave", "ttl": 10})
+        plain = self.row1(NOW + 1, base=OVERLOAD)
+        self.assertTrue(any(f in plain for f in sl.SPRITES["alien"]["red"]), plain)
 
 
 class TestBubbles(PresenceCase):
