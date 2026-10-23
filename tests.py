@@ -2708,6 +2708,302 @@ class TestCreatureMovement(unittest.TestCase):
             self.assertTrue(0 <= p["pos"] <= max(cols - 13, 0))
 
 
+def _cells(plain):
+    """A plain string as terminal cells: a wide char is followed by ""."""
+    out = []
+    for ch in plain:
+        out.append(ch)
+        if sl.vwidth(ch) == 2:
+            out.append("")
+    return out
+
+
+class CreatureCase(PresenceCase):
+    """PresenceCase with the creature on (the suite default is off)."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["RETRO_HUD_CREATURE"] = "1"
+
+    def tearDown(self):
+        os.environ["RETRO_HUD_CREATURE"] = "0"
+        for k in ("RETRO_HUD_CREATURE_SEED", "RETRO_HUD_CREATURE_COLOR", "RETRO_HUD_FRAME"):
+            os.environ.pop(k, None)
+        super().tearDown()
+
+    def rows(self, now=NOW, base=MINIMAL, cols=160, sid=None):
+        return sl.render(self.payload(base, sid), cols, now)
+
+
+class TestCreatureFrame(CreatureCase):
+    ROW = sl.NEON_GREEN + "┌─" + sl.R + "x" * 20
+    LOOK = {"seed": 11, "family": "alien", "color": 45}
+
+    def test_box_sits_over_its_legs_and_the_frame_never_moves(self):
+        for mood in MOODS_ALL:
+            for bubble in ("", "ready", "y" * 18, "日本語のふきだし"):
+                for icon in ("", "!"):
+                    for cols in range(24, 241, 7):
+                        for now in (NOW, NOW + 10, NOW + 170, NOW + 3333):
+                            since = now - 7
+                            pres = {"mood": mood, "bubble": bubble, "since": since,
+                                    "mood_since": since, "icon": icon}
+                            head, row1 = sl._frame_creature(self.ROW, cols, True, 50, now,
+                                                            pres, self.LOOK)
+                            label = (mood, bubble, cols, now)
+                            bare = sl._frame(self.ROW, cols, "┐", True)
+                            self.assertTrue(head.startswith(sl.R), label)
+                            self.assertLessEqual(sl.vislen(head), cols, label)
+                            self.assertEqual(sl.vislen(row1), cols, label)
+                            p_row, p_bare = sl.strip_ansi(row1), sl.strip_ansi(bare)
+                            self.assertEqual(p_row[:23], p_bare[:23], label)
+                            self.assertTrue(p_row.endswith("┐"), label)
+                            track = cols - sl.vislen(self.ROW) - 2
+                            if track < 17:
+                                self.assertEqual(head, sl.R, label)
+                                self.assertEqual(row1, bare, label)
+                                continue
+                            p = sl.pose(11, mood, since, now, track, "alien", 45, icon)
+                            h13, r13 = sl.render_box(p)
+                            col = sl.vislen(self.ROW) + 1 + p["pos"]
+                            hc, rc = _cells(sl.strip_ansi(head)), _cells(p_row)
+                            self.assertEqual(hc[col:col + 13], _cells(sl.strip_ansi(h13)), label)
+                            self.assertEqual(rc[col:col + 13], _cells(sl.strip_ansi(r13)), label)
+                            self.assertNotIn(bubble[:2] or "\0", p_row, label)
+
+    def test_bubble_on_the_head_line_beside_the_box(self):
+        pres = {"mood": "yours", "bubble": "ready", "since": NOW, "mood_since": None}
+        head, row1 = sl._frame_creature(self.ROW, 120, True, 50, NOW, pres, self.LOOK)
+        self.assertRegex(sl.strip_ansi(head), r"[▀▄] +ready|ready +[▀▄]")
+        self.assertNotIn("ready", sl.strip_ansi(row1))
+
+    def test_alien_off_draws_nothing(self):
+        pres = {"mood": "working", "bubble": "hi", "since": NOW, "mood_since": None}
+        head, row1 = sl._frame_creature(self.ROW, 120, True, None, NOW, pres, self.LOOK)
+        self.assertEqual(head, sl.R)
+        self.assertEqual(row1, sl._frame(self.ROW, 120, "┐", True))
+        head, row1 = sl._frame_creature(self.ROW, 120, False, 50, NOW, pres, self.LOOK)
+        self.assertEqual((head, row1), (sl.R, self.ROW))
+
+    def test_gauge_only_creature_follows_the_gauge(self):
+        for pct, mood in ((10, "calm"), (75, "agitated"), (95, "red")):
+            head, row1 = sl._frame_creature(self.ROW, 120, True, pct, NOW, None, self.LOOK)
+            p = sl.pose(11, mood, None, NOW, 120 - sl.vislen(self.ROW) - 2, "alien", 45)
+            self.assertIn(sl.render_box(p)[1], row1, pct)
+
+    def test_the_box_is_one_agent_link(self):
+        action = lambda name, text, extra="": sl.link("retro-hud://" + name, text)
+        pres = {"mood": "working", "bubble": "ready", "since": NOW, "mood_since": None}
+        head, row1 = sl._frame_creature(self.ROW, 120, True, 50, NOW, pres, self.LOOK, action)
+        self.assertEqual(row1.count("retro-hud://agent"), 1)
+        self.assertEqual(head.count("retro-hud://agent"), 1)
+        plain_head = sl.strip_ansi(head)
+        self.assertIn("ready", plain_head)
+        self.assertNotIn("ready\a", head)  # the bubble is outside the link
+
+
+class TestCreatureHud(CreatureCase):
+    def test_three_lines_in_every_mode(self):
+        for knobs in ({}, {"RETRO_HUD_ALIEN": "0"}, {"RETRO_HUD_FRAME": "0"},
+                      {"RETRO_HUD_PRESENCE": "0"}):
+            os.environ.update(knobs)
+            try:
+                for payload in (FULL, MINIMAL, OVERLOAD, {}):
+                    for cols in range(50, 241, 10):
+                        rows = sl.render(copy.deepcopy(payload), cols, NOW)
+                        self.assertEqual(len(rows), 3, (knobs, cols))
+                        self.assertTrue(rows[0].startswith(sl.R), (knobs, cols))
+                        for row in rows:
+                            self.assertLessEqual(sl.vislen(row), cols, (knobs, cols))
+                        if knobs and "RETRO_HUD_PRESENCE" not in knobs:
+                            self.assertEqual(rows[0], sl.R, (knobs, cols))
+            finally:
+                for k in knobs:
+                    os.environ.pop(k, None)
+
+    def test_off_is_the_two_row_hud(self):
+        os.environ["RETRO_HUD_CREATURE"] = "0"
+        rows = sl.render(copy.deepcopy(FULL), 160, NOW)
+        self.assertEqual(len(rows), 2)
+        self.assertIn(">o.o<", sl.strip_ansi(rows[0]))
+
+    def test_rows_1_and_2_unchanged_by_the_creature(self):
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW - 1, "text": "deploy finished", "ttl": 600})
+        for alien in ("1", "0"):
+            os.environ["RETRO_HUD_ALIEN"] = alien
+            for cols in range(50, 241, 10):
+                for t in (NOW, NOW + 10, NOW + 30):
+                    on = sl.render(self.payload(FULL), cols, t)
+                    os.environ["RETRO_HUD_CREATURE"] = "0"
+                    off = sl.render(self.payload(FULL), cols, t)
+                    os.environ["RETRO_HUD_CREATURE"] = "1"
+                    self.assertEqual(on[2], off[1], (alien, cols))
+                    if alien == "0":
+                        self.assertEqual(on[1:], off, cols)
+                        self.assertEqual(on[0], sl.R, cols)
+                        continue
+                    p_on, p_off = sl.strip_ansi(on[1]), sl.strip_ansi(off[0])
+                    self.assertEqual(sl.vislen(on[1]), sl.vislen(off[0]), cols)
+                    # the creature's rule holds no spaces (the 2.x one may
+                    # carry a bubble): its last space ends the segments
+                    m = re.match(r"^(.*) [^ ]*┐$", p_on)
+                    segs = m.group(1) if m else p_on
+                    self.assertTrue(p_off.startswith(segs + (" " if m else "")), cols)
+                    self.assertEqual(p_on[-1], p_off[-1])
+        os.environ.pop("RETRO_HUD_ALIEN", None)
+
+    def test_short_rule_hides_it_with_a_blank_head_line(self):
+        rows = sl.render(copy.deepcopy(FULL), 60, NOW)
+        self.assertEqual(rows[0], sl.R)
+        self.assertFalse(re.search("[▀▄]", sl.strip_ansi(rows[1])))
+
+    def test_mood_since_is_recorded_and_kept(self):
+        self.tx(user(NOW - 9), asst(NOW - 2, "tool_use", ("tool_use",)))
+        self.rows(NOW)
+        s = self.state_file()
+        self.assertEqual((s["mood"], s["mood_since"], s["creature"]), ("working", NOW, "alien"))
+        self.rows(NOW + 10)
+        self.assertEqual(self.state_file()["mood_since"], NOW)
+        self.tx(user(NOW - 9), asst(NOW + 15))
+        self.rows(NOW + 20)
+        s = self.state_file()
+        self.assertEqual((s["mood"], s["mood_since"]), ("yours", NOW + 20))
+
+    def test_mood_since_drives_the_entry_tics(self):
+        self.tx(user(NOW - 9), asst(NOW - 2, "tool_use", ("tool_use",)))
+        first = self.rows(NOW)
+        later = self.rows(NOW + 40)
+        seed = sl.creature_seed(None, "", self.SID)
+        segs = re.match(r"^(.*) [^ ]*┐$", sl.strip_ansi(later[1])).group(1)
+        track = 160 - sl.vwidth(segs) - 2
+        for now, rows in ((NOW, first), (NOW + 40, later)):
+            p = sl.pose(seed, "working", NOW, now, track, "alien")
+            self.assertIn(sl.render_box(p)[1], rows[1], now)
+        # the first frame is the entry scatter, not the steady pose
+        self.assertNotEqual(sl.render_box(sl.pose(seed, "working", None, NOW, track)),
+                            sl.render_box(sl.pose(seed, "working", NOW, NOW, track)))
+
+    def test_unwritable_cache_means_steady_poses(self):
+        blocker = os.path.join(self.tmp, "file-not-dir")
+        with open(blocker, "w") as f:
+            f.write("x")
+        os.environ["RETRO_HUD_CACHE_DIR"] = os.path.join(blocker, "sub")
+        self.tx(asst(NOW - 2, "tool_use"))
+        pres = sl.presence(self.payload(), NOW, 0, 0, 0, 0, creature=True)
+        self.assertIsNone(pres["mood_since"])
+
+    def test_seed_and_family_overrides(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        base = self.rows(NOW + 100)
+        os.environ["RETRO_HUD_CREATURE_SEED"] = "7"
+        env7 = self.rows(NOW + 100)
+        self.assertNotEqual(env7[0], base[0])
+        os.environ.pop("RETRO_HUD_CREATURE_SEED")
+        self.put_state(seed=7)
+        self.assertEqual(self.rows(NOW + 100)[:2], env7[:2])
+        self.put_state(seed=True)          # junk: ignored
+        self.assertEqual(self.rows(NOW + 100)[0], base[0])
+        os.environ["RETRO_HUD_SPRITE"] = "robot"
+        self.rows(NOW + 100)
+        self.assertEqual(self.state_file()["creature"], "bot")
+        self.put_state(sprite="ghost")
+        self.rows(NOW + 100)
+        self.assertEqual(self.state_file()["creature"], "blob")
+        self.put_state(sprite="beast")
+        self.rows(NOW + 100)
+        self.assertEqual(self.state_file()["creature"], "beast")
+
+    def test_color_pin(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_CREATURE_COLOR"] = "pink"
+        self.assertTrue(_has_color(self.rows(NOW + 100)[0], 198))
+
+    def test_family_names_in_the_state_file_are_ignored_when_off(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_CREATURE"] = "0"
+        os.environ["RETRO_HUD_SPRITE"] = "cat"
+        self.put_state(sprite="blob")
+        self.assertIn("=^.^/", self.row1(NOW))
+        self.assertNotIn("creature", self.state_file())
+
+    def test_gauge_only_creature_peeks_at_the_state_file(self):
+        # no transcript: unknown state, the gauge-only creature; the
+        # state file's seed still applies and nothing is written
+        self.put_state(seed=7)
+        before = open(self.path(".state.json")).read()
+        a = self.rows(NOW, FULL)
+        os.environ["RETRO_HUD_CREATURE_SEED"] = "7"
+        self.put_state()
+        self.assertEqual(self.rows(NOW, FULL), a)
+        self.put_state(seed=7)
+        self.rows(NOW, FULL)
+        self.assertEqual(open(self.path(".state.json")).read(), before)
+
+    def test_icon_events(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW, "icon": "!", "ttl": 30})
+        head = sl.strip_ansi(self.rows(NOW + 1)[0])
+        self.assertIn("!", head)
+        self.assertNotIn("!", sl.strip_ansi(self.rows(NOW + 40)[0]))
+        self.events({"ts": NOW + 50, "text": "built", "icon": "*", "ttl": 30})
+        head = sl.strip_ansi(self.rows(NOW + 51)[0])
+        self.assertIn("*", head)
+        self.assertIn("built", head)
+
+    def test_bad_icons_are_ignored(self):
+        evs = [{"ts": NOW, "icon": bad, "ttl": 30}
+               for bad in ("ab", "́", "", " ", "\x1b", 5, None, "❤️")]
+        self.assertEqual(sl.newest_icon(evs, NOW), "")
+        self.assertEqual(sl.newest_icon([{"ts": NOW, "icon": "⚑", "ttl": 30}], NOW),
+                         "⚑")
+        self.assertEqual(sl.newest_icon([{"ts": NOW - 40, "icon": "!"}], NOW), "")
+
+    def test_wave_event_raises_the_arms(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.events({"ts": NOW, "text": "wave", "ttl": 30})
+        pres = sl.presence(self.payload(), NOW + 1, 0, 0, 0, 0, creature=True)
+        self.assertEqual(pres["mood"], "yours")
+        self.assertEqual(pres["mood_since"], NOW)
+        self.assertEqual(self.state_file()["mood"], "working")  # the gesture is not stored
+
+
+class TestCreatureCLI(unittest.TestCase):
+    SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
+
+    def run_script(self, stdin_bytes, creature, *args):
+        env = dict(os.environ, COLUMNS="120", RETRO_HUD_CREATURE=creature)
+        return subprocess.run([sys.executable, self.SCRIPT] + list(args),
+                              input=stdin_bytes, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=env, timeout=10)
+
+    def test_line_counts(self):
+        for creature, newlines in (("1", 2), ("0", 1)):
+            for stdin, args in ((b"", ()), (b"{not json", ()), (b"", ("--demo",))):
+                p = self.run_script(stdin, creature, *args)
+                self.assertEqual(p.returncode, 0, p.stderr.decode())
+                self.assertEqual(p.stderr, b"")
+                self.assertEqual(p.stdout.count(b"\n"), newlines, (creature, stdin, args))
+
+    def test_degraded_fallback_keeps_three_lines(self):
+        import contextlib
+        import io
+        saved = sl.render
+        sl.render = lambda *a: 1 / 0
+        os.environ["RETRO_HUD_CREATURE"] = "1"
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                sl.main(["--demo"])
+            lines = buf.getvalue().split("\n")
+            self.assertEqual(len(lines), 3)
+            self.assertEqual(lines[0], sl.R)
+            self.assertIn("(status degraded)", lines[2])
+        finally:
+            sl.render = saved
+            os.environ["RETRO_HUD_CREATURE"] = "0"
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")

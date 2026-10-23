@@ -730,6 +730,25 @@ def newest_event(events, now):
     return "", None
 
 
+def _icon_ok(icon):
+    """One printable, visible code point (a letter, digit, punctuation
+    or symbol), so it never takes zero cells or two glyphs."""
+    return isinstance(icon, str) and len(icon) == 1 and \
+        unicodedata.category(icon)[0] in "LNPS"
+
+
+def newest_icon(events, now):
+    """The `icon` of the newest unexpired events-channel entry that
+    carries a valid one, or "". An icon may come with or without text."""
+    for e in reversed(events):
+        ts = _num_or_none(e.get("ts"))
+        ttl = _num_or_none(e.get("ttl"))
+        ttl = EVENT_TTL_S if ttl is None else ttl
+        if ts is not None and ts - 5 <= now < ts + ttl and _icon_ok(e.get("icon")):
+            return e["icon"]
+    return ""
+
+
 def next_bubble(prev, snap, now, event="", name="", quips=True, mode="alerts"):
     """(bubble text, state-file updates) for this refresh.
 
@@ -808,11 +827,15 @@ def _write_json(path, obj):
         return False
 
 
-def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
+def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
     """Agent presence for this refresh: {"mood", "bubble", "since",
-    "sprite"}, or None for the plain gauge alien (presence off, or the
-    agent's state is unknown). Never raises; any IO failure degrades to
-    no bubble."""
+    "sprite", "mood_since", "seed", "icon"}, or None for the plain gauge
+    alien (presence off, or the agent's state is unknown). Never raises;
+    any IO failure degrades to no bubble.
+
+    `mood_since` is when the current mood began, kept in the state file
+    (None when it can't be written); `seed` is the state file's raw
+    `seed`. With `creature`, `sprite` may also name a creature family."""
     if os.environ.get("RETRO_HUD_PRESENCE", "1") == "0":
         return None
     idle_s = (num(os.environ.get("RETRO_HUD_IDLE_MIN")) or IDLE_S // 60) * 60
@@ -831,18 +854,21 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
     if state == "unknown":
         return None
     sprite = os.environ.get("RETRO_HUD_SPRITE", "alien")
-    bubble = ""
-    wave_since = None
+    bubble = icon = ""
+    wave_since = mood_since = seed = None
+    mood = pick_mood(gauge_pct, state)
     d = cache_dir() if sid else ""
     if d:
         sp = os.path.join(d, sid + ".state.json")
         prev = _read_json(sp)
-        if prev.get("sprite") in SPRITES:
+        if prev.get("sprite") in SPRITES or (creature and prev.get("sprite") in FAMILIES):
             sprite = prev["sprite"]
+        seed = prev.get("seed")
         snap = {"state": state, "since": since, "ctx_pct": ctx_pct,
                 "limit_pct": limit_pct, "cost": cost}
-        event, ets = newest_event(
-            _tail_lines(os.path.join(d, sid + ".events.jsonl"), 16384), now)
+        events = _tail_lines(os.path.join(d, sid + ".events.jsonl"), 16384)
+        event, ets = newest_event(events, now)
+        icon = newest_icon(events, now) if creature else ""
         if event == WAVE_EVENT:  # a gesture, not words: wave instead
             event, wave_since = "", ets
         name = _clean(os.environ.get("RETRO_HUD_AGENT_NAME", ""))
@@ -855,16 +881,26 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
         rec.update(snap)
         rec.update(upd)
         rec["updated"] = now
+        if prev.get("mood") == mood and _num_or_none(prev.get("mood_since")) is not None:
+            rec["mood_since"] = prev["mood_since"]
+        else:  # a new mood (or the first sighting): its entry tics start now
+            rec["mood"], rec["mood_since"] = mood, now
+        if creature:  # for the click menu, which can't see this environment
+            rec["creature"] = creature_family(sprite)
+        else:
+            rec.pop("creature", None)
         if now - (_num_or_none(prev.get("last_prune")) or 0) >= PRUNE_EVERY_S:
             _prune(d, now, sid + ".")
             rec["last_prune"] = now
         if _write_json(sp, rec):
             bubble = text
+            mood_since = rec["mood_since"]
             _map_pane(d, sid)
-    mood = pick_mood(gauge_pct, state)
     if wave_since is not None and mood not in ("red", "error", "agitated"):
-        mood, since = "yours", wave_since  # waves in place for the event's ttl
-    return {"mood": mood, "bubble": bubble, "since": since, "sprite": sprite}
+        # waves in place for the event's ttl; the gesture is not stored
+        mood, since, mood_since = "yours", wave_since, wave_since
+    return {"mood": mood, "bubble": bubble, "since": since, "sprite": sprite,
+            "mood_since": mood_since, "seed": seed, "icon": icon}
 
 
 def _map_pane(d, sid):
@@ -1352,10 +1388,84 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None,
     return "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, corner, R)
 
 
+def _frame_creature(row, cols, frame_on, alien_pct, now, pres, look, action=None):
+    """(head line, row 1) with the pixel creature.
+
+    Row 1 is `row` closed by the rule and corner exactly as _frame does;
+    the creature's lower half replaces 13 rule cells, its upper half sits
+    in the same 13 columns of the head line, which holds nothing else but
+    the bubble (beside the box, in the travel direction). No creature
+    (alien off, frame off, a rule shorter than CREATURE_MIN_TRACK): the
+    head line is a bare SGR reset, never an empty string, so the HUD keeps
+    its three lines.
+
+    `pres` is presence() or None (the gauge-only creature: calm, agitated
+    or red by alien_pct, steady poses). `look` is {"seed", "family",
+    "color"}. `action` (from make_action) links both halves of the box,
+    never the bubble, to retro-hud://agent.
+    """
+    gap = cols - vislen(row)
+    track = gap - 2
+    if not frame_on or alien_pct is None or track < CREATURE_MIN_TRACK:
+        return R, _frame(row, cols, "┐", frame_on)
+    if pres is None:
+        mood = "calm" if alien_pct < WARN_PCT else ("agitated" if alien_pct < RED_PCT else "red")
+        mood_since, icon, bubble = None, "", ""
+    else:
+        mood, mood_since = pres.get("mood"), _num_or_none(pres.get("mood_since"))
+        icon, bubble = pres.get("icon") or "", pres.get("bubble") or ""
+    p = pose(look["seed"], mood, mood_since, now, track, look["family"], look["color"],
+             icon if _icon_ok(icon) else "")
+    head13, rule13 = render_box(p)
+    if action:
+        head13, rule13 = action("agent", head13), action("agent", rule13)
+    pos, span = p["pos"], track - BOX_W
+    fill = "─" * pos + R + rule13 + RULE + "─" * (span - pos)
+    row1 = "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, "┐", R)
+    col = vislen(row) + 1 + pos  # the box's first column, on both lines
+    room = cols - col - BOX_W    # head-line cells right of the box
+    side, bubble = _place_bubble(col, col + room, bubble, p["right"]) if bubble else (0, "")
+    bw = 1 + vwidth(bubble) if side else 0
+    if side == -1:
+        head = " " * (col - bw) + BUBBLE + bubble + R + " " + head13
+    else:
+        head = " " * col + head13
+        if side == 1:
+            head += " " + BUBBLE + bubble + R
+    return R + head, row1
+
+
+def creature_look(data, pres):
+    """{"seed", "family", "color"} for this session. The state file's
+    `seed` / `sprite` win over RETRO_HUD_CREATURE_SEED / RETRO_HUD_SPRITE;
+    without presence the state file is only peeked at, never written."""
+    sid = data.get("session_id")
+    sid = sid if isinstance(sid, str) and _SID_RE.fullmatch(sid) else ""
+    if pres is not None:
+        st_seed, sprite = pres.get("seed"), pres.get("sprite")
+    else:
+        prev = {}
+        d = cache_dir(create=False) if sid else ""
+        if d:
+            prev = _read_json(os.path.join(d, sid + ".state.json"))
+        st_seed, sprite = prev.get("seed"), prev.get("sprite")
+        if sprite not in SPRITES and sprite not in FAMILIES:
+            sprite = os.environ.get("RETRO_HUD_SPRITE")
+    seed = creature_seed(st_seed, os.environ.get("RETRO_HUD_CREATURE_SEED", ""), sid)
+    return {"seed": seed, "family": creature_family(sprite),
+            "color": creature_color(seed, os.environ.get("RETRO_HUD_CREATURE_COLOR", ""))}
+
+
+def creature_on():
+    return os.environ.get("RETRO_HUD_CREATURE", "1") != "0"
+
+
 def render(data, cols, now):
-    """Return [row1, row2] sized to cols."""
+    """Return [row1, row2] sized to cols, or [head line, row1, row2]
+    with the pixel creature (RETRO_HUD_CREATURE, on by default)."""
     global _EMOJI_W
     frame_on = os.environ.get("RETRO_HUD_FRAME", "1") != "0"
+    creature = creature_on()
     cd_pct = num(os.environ.get("RETRO_HUD_COUNTDOWN_PCT"), WARN_PCT)
     emoji_mode = os.environ.get("RETRO_HUD_EMOJI", "2")
     _EMOJI_W = 1 if emoji_mode == "1" else 2
@@ -1623,10 +1733,17 @@ def render(data, cols, now):
         alien_pct = max(clamp(ctx_pct, 0, 100), limit_pct)
         try:
             pres = presence(data, now, alien_pct, clamp(ctx_pct, 0, 100),
-                            limit_pct, round(cost, 2))
+                            limit_pct, round(cost, 2), creature)
         except Exception:  # presence is decoration: never cost the bar
             pres = None
 
+    if creature:
+        try:
+            head, top = _frame_creature(row1, cols, frame_on, alien_pct, now, pres,
+                                        creature_look(data, pres), action)
+        except Exception:  # decoration again: a blank head line, a plain rule
+            head, top = R, _frame(row1, cols, "┐", frame_on)
+        return [head, top, _frame(row2, cols, "┘", frame_on)]
     return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres, action),
             _frame(row2, cols, "┘", frame_on)]
 
@@ -1690,8 +1807,9 @@ def main(argv):
         model = dig(data, "model", "display_name") or "retro-hud"
         rows = ["{}┌─{}[ {}{}{} ]{}".format(NEON_GREEN, R, MODEL_TXT, model, R + MODEL_BOX, R),
                 "{}└─{} {}(status degraded){}".format(NEON_GREEN, R, DIM, R)]
-    print(rows[0])
-    print(rows[1], end="")
+        if creature_on():
+            rows.insert(0, R)  # three lines whatever happens: nothing jumps
+    print("\n".join(rows), end="")
     return 0
 
 
