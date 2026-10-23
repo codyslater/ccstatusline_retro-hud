@@ -54,6 +54,16 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   another; faster while working), blinks (about one frame in seven),
   breathes (one dot or pixel wider every fourth frame) and hops while
   calm or working (about one frame in twelve).
+- **Excursions** (`tiny` and `big`): every 5–15 minutes, for 4–20 s, a
+  calm, idle or waiting creature explores the bar: it stretches to double
+  width, peeks round the right corner, crawls over row 1's words, visits
+  row 2 (sometimes sitting on the duration/cost field) or hangs upside
+  down from the top-right corner. Never while working, waiting on a
+  prompt, after an error, under a hot gauge or with a bubble or icon to
+  show; never in `tall`. A cell compositor lays it over the rows' cells,
+  keeping every colour and link escape, never covering the corners or
+  leads, never changing a row's width. Deterministic from (seed, clock);
+  `RETRO_HUD_EXCURSIONS=0` turns it off, byte for byte.
 - Poses: a walk cycle while working, stops and waves when the turn is
   yours (a jump as it starts), a bounce with a yellow `?` when a prompt
   waits, slow blinks when idle, flat on the rule when asleep, a shake on

@@ -113,7 +113,8 @@ tall                                                     ▄▀▄▀▄
 The creature owns a fixed box (7 cells for `tiny`, 13 for `big` and
 `tall`) and only rule cells inside it; every pose, arm, shake, `?` and
 icon stays inside the box, so the segments, the frame corners and row 2's
-readings never move. `tiny` moves in half cells: a one-dot step re-draws
+readings never move (an excursion (below) covers a few cells for a
+few seconds, then uncovers them; nothing moves then either). `tiny` moves in half cells: a one-dot step re-draws
 the braille cells. `big` walks the stretch of rule that rows 1 and 2
 share (row 2's rule starts after its last segment). When that rule is
 too short (under 11 cells for `tiny`, 17 for the others) the creature
@@ -170,6 +171,29 @@ let Claude Code redraw the status line every second: set
 
 With a longer interval (the installer sets 5) you see the same walk,
 sampled every 5 seconds.
+
+**Excursions.** Now and then (`tiny` and `big`) the creature leaves its box and explores
+the rest of the bar for 4–20 seconds, one excursion every 5–15 minutes,
+then goes back to its walk:
+
+- **stretch**: the body doubles in width along the rule, then snaps back;
+- **peek**: it slips behind the right corner and peers round it (only
+  its eyes and an arm show), then pops out;
+- **crawl**: it walks left over the words of row 1 (branch, directory,
+  model box) to the frame's lead and back;
+- **downstairs**: it climbs down the right edge to row 2, wanders its
+  rule, sometimes sits on the duration/cost field, and climbs back;
+- **hang**: it dangles upside down from the top-right corner.
+
+It only goes when it is calm, idle or waiting on you, never while the
+agent works, a prompt waits, after an error, under a hot gauge, or while
+it has a bubble or an icon to show. Like everything else it is a pure
+function of the seed and the clock, so a refresh never re-rolls it. It
+draws over the cells it passes and leaves them as they were: colours and
+links run on underneath, a wide character it half covers is hidden whole,
+the frame corners and leads are never covered and no row changes width.
+While it is out it is not a link (the click menu waits until it is home).
+`tall` keeps it home; `RETRO_HUD_EXCURSIONS=0` turns excursions off.
 
 **What it reacts to**, highest priority first. The body keeps its colour
 except under a hot gauge; the mood shows in the pose and the eyes:

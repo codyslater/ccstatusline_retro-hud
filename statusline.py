@@ -50,6 +50,8 @@ Env toggles:
     RETRO_HUD_TICK_S=1           seconds per creature frame (pair with
                                  statusLine.refreshInterval 1 to see it move
                                  every second)
+    RETRO_HUD_EXCURSIONS=0       keep the creature on its rule: no trips
+                                 over the rest of the bar (tiny and big)
     RETRO_HUD_CREATURE_SEED=<s>  pin the creature's look (integer or any
                                  string; default: the session id)
     RETRO_HUD_CREATURE_COLOR=<c> pin its colour: pink, green, purple, cyan,
