@@ -85,7 +85,11 @@ beside it come from the events channel
 per line; "icon" is one character the creature holds up), from state
 changes, and from rare idle quips; an event whose text is "wave" makes it
 wave instead. With RETRO_HUD_ACTIONS=1 in tmux the creature links to
-retro-hud://agent (wave, quiet, sprite, size, reroll, status).
+retro-hud://card (a status card for the session) and the session-name
+segment (◈ name) to retro-hud://agent (wave, quiet, sprite, size, reroll,
+status);
+the state file also carries the card's facts (model, effort, dur_s,
+lines_add, lines_del, dir).
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
@@ -921,6 +925,30 @@ def _write_json(path, obj):
         return False
 
 
+def card_facts(data):
+    """What the status card (retro-hud://card) shows beyond the gauges, from
+    this refresh's payload: model, effort, session duration (s), lines
+    added / removed, working directory's basename. Only what is there."""
+    out = {}
+    model = dig(data, "model", "display_name") or dig(data, "model", "id")
+    if isinstance(model, str) and model.strip():
+        out["model"] = model.strip()[:40]
+    effort = dig(data, "effort", "level")
+    if isinstance(effort, str) and effort.strip():
+        out["effort"] = effort.strip()[:12]
+    dur = _num_or_none(dig(data, "cost", "total_duration_ms"))
+    if dur is not None:
+        out["dur_s"] = int(max(dur, 0) // 1000)
+    for key, src in (("lines_add", "total_lines_added"), ("lines_del", "total_lines_removed")):
+        v = _num_or_none(dig(data, "cost", src))
+        if v is not None:
+            out[key] = int(v)
+    cwd = dig(data, "workspace", "current_dir") or data.get("cwd")
+    if isinstance(cwd, str) and cwd.strip():
+        out["dir"] = (os.path.basename(cwd.rstrip(os.sep)) or cwd)[:40]
+    return out
+
+
 def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
     """Agent presence for this refresh: {"mood", "bubble", "since",
     "sprite", "mood_since", "seed", "icon"}, or None for the plain gauge
@@ -960,6 +988,7 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
         seed = prev.get("seed")
         snap = {"state": state, "since": since, "ctx_pct": ctx_pct,
                 "limit_pct": limit_pct, "cost": cost}
+        snap.update(card_facts(data))
         events = _tail_lines(os.path.join(d, sid + ".events.jsonl"), 16384)
         event, ets = newest_event(events, now)
         icon = newest_icon(events, now) if creature else ""
@@ -1936,7 +1965,7 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None,
     bubble takes rule cells, never adds any: the frame math is unchanged.
 
     `action` (from make_action) wraps the sprite, not its bubble, in the
-    retro-hud://agent link; links are invisible, so nothing moves.
+    retro-hud://card link; links are invisible, so nothing moves.
     """
     gap = cols - vislen(row)
     if not frame_on or gap < 2:
@@ -1971,7 +2000,7 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None,
         right = "─" * (span - pos - bw if side == 1 else span - pos)
         if side == -1:
             left += R + BUBBLE + bubble + R + RULE + "╶"
-        mid = R + color + (action("agent", sprite) if action else sprite) + R + RULE
+        mid = R + color + (action("card", sprite) if action else sprite) + R + RULE
         if side == 1:
             mid += "╴" + R + BUBBLE + bubble + R + RULE
         fill = left + mid + right
@@ -2018,7 +2047,7 @@ def _frame_tiny(row, cols, frame_on, alien_pct, now, pres, look, action=None):
                   look["color"], icon, tick_s())
     box = render_tiny(p)
     if action:
-        box = action("agent", box)
+        box = action("card", box)
     col = vislen(row) + 1 + p["pos"]
     return _boxed(row, cols, "┐", col, box, TINY_W, bubble, p["right"])
 
@@ -2040,7 +2069,7 @@ def _frame_big(row1, row2, cols, frame_on, alien_pct, now, pres, look, action=No
              icon, tick_s())
     top, bottom = render_box(p, rule_top=True)
     if action:
-        top, bottom = action("agent", top), action("agent", bottom)
+        top, bottom = action("card", top), action("card", bottom)
     col = start + p["pos"]
     return (_boxed(row1, cols, "┐", col, top, BOX_W, bubble, p["right"]),
             _boxed(row2, cols, "┘", col, bottom, BOX_W))
@@ -2060,7 +2089,7 @@ def _frame_creature(row, cols, frame_on, alien_pct, now, pres, look, action=None
     `pres` is presence() or None (the gauge-only creature: calm, agitated
     or red by alien_pct, steady poses). `look` is {"seed", "family",
     "color"}. `action` (from make_action) links both halves of the box,
-    never the bubble, to retro-hud://agent.
+    never the bubble, to retro-hud://card.
     """
     gap = cols - vislen(row)
     track = gap - 2
@@ -2076,7 +2105,7 @@ def _frame_creature(row, cols, frame_on, alien_pct, now, pres, look, action=None
              icon if _icon_ok(icon) else "", tick_s())
     head13, rule13 = render_box(p)
     if action:
-        head13, rule13 = action("agent", head13), action("agent", rule13)
+        head13, rule13 = action("card", head13), action("card", rule13)
     pos, span = p["pos"], track - BOX_W
     fill = "─" * pos + R + rule13 + RULE + "─" * (span - pos)
     row1 = "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, "┐", R)
@@ -2241,8 +2270,8 @@ def render(data, cols, now):
     def vim_seg():
         return VIM_COLORS.get(vim_mode, NEON_CYAN) + "[" + vim_mode[0] + "]" + R
 
-    def session_seg(name):
-        return DIM + "◈ " + name + R
+    def session_seg(name):  # the name beside the creature is the agent menu's link
+        return DIM + action("agent", "◈ " + name) + R
 
     # Auto-generated session names run long — cap them before layout.
     t_model, t_dir, t_branch = model, dir_name, branch

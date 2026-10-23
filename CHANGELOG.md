@@ -37,6 +37,15 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   is the same motion sampled every 5 s.
 
 ### Added
+- **The creature's status card.** Right-click (or Ctrl+click) the creature
+  and a popup shows the session: state and how long, model and effort,
+  context %, worst limit %, cost and duration, lines, directory, plus one
+  tip (a different one every ten minutes). Any key closes it; `m` opens
+  the agent menu. The creature now links to `retro-hud://card`; the
+  session-name segment (`◈ name`, row 1) carries the `retro-hud://agent`
+  menu link. The state file gains the card's facts (`model`, `effort`,
+  `dur_s`, `lines_add`, `lines_del`, `dir`). A
+  `~/.claude/retro-hud-handler.local.sh` may render its own card.
 - **Sizes** (`RETRO_HUD_CREATURE`):
   - `tiny` (default): braille, 2×4 dots per cell, a 10×4-dot body in a
     fixed 7-cell box on the top rule, moving in half cells (a one-dot

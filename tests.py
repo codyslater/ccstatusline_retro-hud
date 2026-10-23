@@ -589,11 +589,14 @@ class TestClickActionLinks(unittest.TestCase):
         self.assertEqual((row, url), (1, "retro-hud://usage?" + self.Q))
         self.assertIn("63%", text)
         self.assertIn("81% · 3d", text)
-        (row, url, text), = found["agent"]  # the alien on the top rule
-        self.assertEqual((row, url), (0, "retro-hud://agent?" + self.Q))
+        (row, url, text), = found["card"]  # the alien on the top rule: its status card
+        self.assertEqual((row, url), (0, "retro-hud://card?" + self.Q))
         self.assertIn(text, [f for pair in sl.ALIEN_FRAMES for f in pair])
+        (row, url, text), = found["agent"]  # the session-name segment: the agent menu
+        self.assertEqual((row, url), (0, "retro-hud://agent?" + self.Q))
+        self.assertEqual(text, "◈ my-session")
         self.assertEqual(set(found),
-                         {"model", "effort", "ctx", "cost", "diff", "usage", "agent"})
+                         {"model", "effort", "ctx", "cost", "diff", "usage", "agent", "card"})
 
     def test_branch_and_pr_keep_their_web_links(self):
         os.environ["RETRO_HUD_ACTIONS"] = "1"
@@ -683,6 +686,16 @@ elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd:
     sys.stdout.write(answer.get(cmd[-1], "") + "\n")
 elif cmd[:1] == ["show-options"]:
     sys.stdout.write(os.environ.get("FAKE_TMUX_FEATURES", "") + "\n")
+elif cmd[:1] == ["display-popup"]:
+    import re, shutil
+    m = re.fullmatch(r"bash '([^']+)'", cmd[-1])        # keep the popup's files: the handler removes them after
+    if m and os.path.exists(m.group(1)):
+        shutil.copy(m.group(1), os.path.join(os.environ["HOME"], "popup.runner"))
+        card = re.search(r"^cat '([^']+)'$", open(m.group(1)).read(), re.M)
+        if card and os.path.exists(card.group(1)):
+            shutil.copy(card.group(1), os.path.join(os.environ["HOME"], "popup.card"))
+    if os.environ.get("FAKE_TMUX_POPUP_RC"):
+        sys.exit(int(os.environ["FAKE_TMUX_POPUP_RC"]))   # what the popup's command exited with
 '''
 
 FAKE_LOGGER = r'''#!/usr/bin/env python3
@@ -1483,6 +1496,107 @@ class TestHandlerAgent(ShellHarness):
         self.assertEqual(self.get_state(), {"state": "yours"})
 
 
+class TestHandlerCard(TestHandlerAgent):
+    """The `card` action: the creature's status card, a popup from the
+    state file's facts plus one tip; any key closes it, m opens the menu."""
+
+    def popup(self):
+        pops = self.tmux_calls("display-popup")
+        self.assertEqual(len(pops), 1, self.log("tmux"))
+        argv = pops[0]
+        opts = {argv[i]: argv[i + 1] for i in range(1, len(argv) - 1, 2)}
+        self.assertEqual(opts["-c"], "/dev/pts/3")
+        self.assertRegex(opts["-E"], r"^bash '[^']+'$")
+        with open(os.path.join(self.home, "popup.runner")) as f:
+            runner = f.read()
+        with open(os.path.join(self.home, "popup.card")) as f:
+            text = f.read()
+        self.assertEqual([n for n in os.listdir(os.path.join(self.home, ".cache", "retro-hud")) if n.startswith("card.")],
+                         [], "the card's files are removed once the popup returns")
+        return opts, runner, sl.strip_ansi(text)
+
+    def test_card_shows_the_facts_and_a_tip(self):
+        self.map_pane()
+        self.put_state({"state": "working", "since": 1700000000, "ctx_pct": 32, "limit_pct": 19, "cost": 160.7,
+                        "model": "Opus 5.5", "effort": "max", "dur_s": 28200, "lines_add": 563, "lines_del": 4,
+                        "dir": "nostromo"})
+        p = self.run_handler(self.url("card"))
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        opts, runner, text = self.popup()
+        lines = text.rstrip("\n").split("\n")
+        self.assertTrue(lines[0].startswith("agent · working for "), lines)
+        self.assertEqual(lines[1], "Opus 5.5 · effort max")
+        self.assertEqual(lines[2], "context 32% · limit 19% · $160.70 · 7h50m")
+        self.assertEqual(lines[3], "+563/-4 · dir nostromo")
+        self.assertEqual(lines[4], "")
+        self.assertTrue(lines[5].startswith("tip: "), lines)
+        self.assertEqual(lines[6], "any key closes · m: menu")
+        self.assertEqual(opts["-T"], " agent ")
+        self.assertEqual(opts["-h"], str(len(lines) + 2))
+        self.assertLessEqual(int(opts["-w"]), 78)
+        self.assertIn("read -rsn1 k", runner)
+        self.assertIn('[ "$k" = m ] && exit 10', runner)
+        self.assertEqual(self.tmux_calls("display-menu"), [])
+
+    def test_card_without_facts_still_opens(self):
+        self.map_pane()
+        p = self.run_handler(self.url("card"))
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        _, _, text = self.popup()
+        self.assertTrue(text.startswith("agent · no status yet\n"), text)
+        self.assertIn("tip: ", text)
+
+    def test_card_uses_the_agent_name_and_m_opens_the_menu_after(self):
+        self.write_config("RETRO_HUD_AGENT_NAME=Nova\n")
+        self.map_pane()
+        p = self.run_handler(self.url("card", sock="/tmp/tmux-1000/default"), FAKE_TMUX_POPUP_RC="10")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        pops = self.tmux_calls("display-popup")
+        self.assertEqual(len(pops), 1)
+        self.assertIn(" Nova ", pops[0])
+        client, title, items = self.menu()          # m: the menu opens once the popup is closed
+        self.assertEqual(title, "Nova")
+        self.assertEqual(items[0][0], "wave")
+        self.assertTrue(all(c[:2] == ["-S", "/tmp/tmux-1000/default"] for c in self.log("tmux")), self.log("tmux"))
+
+    def test_card_needs_a_mapped_claude_pane(self):
+        p = self.run_handler(self.url("card"))                      # no pane map
+        self.assertEqual(self.tmux_calls("display-popup"), [])
+        self.assertTrue(any("no agent presence" in m for m in self.messages()), self.messages())
+        self.map_pane()
+        self.run_handler(self.url("card"), FAKE_TMUX_PANE_CMD="vim")
+        self.assertEqual(self.tmux_calls("display-popup"), [])
+
+    def test_card_is_detached_inside_the_binding(self):
+        import time
+        self.map_pane()
+        menu_file = os.path.join(self.tmp, "m.tmux")
+        with open(menu_file, "w") as f:
+            f.write("stale\n")
+        p = self.run_handler(self.url("card"), RETRO_HUD_MENU_FILE=menu_file, RETRO_HUD_CLIENT="/dev/pts/3")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertFalse(os.path.exists(menu_file))
+        for _ in range(50):
+            if self.tmux_calls("display-popup"):
+                break
+            time.sleep(0.1)
+        self.popup()
+
+    def test_local_extension_may_render_the_card_itself(self):
+        self.map_pane()
+        ext = os.path.join(self.home, ".claude", "retro-hud-handler.local.sh")
+        os.makedirs(os.path.dirname(ext), exist_ok=True)
+        with open(ext, "w") as f:
+            f.write('case "$1" in retro-hud://card*) echo "mine: $1" > "$HOME/ext.out"; exit 0 ;; esac\n')
+        p = self.run_handler(self.url("card"))
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        with open(os.path.join(self.home, "ext.out")) as f:
+            self.assertEqual(f.read().strip(), "mine: retro-hud://card?pane=%257")
+        self.assertEqual(self.tmux_calls("display-popup"), [])
+        self.run_handler(self.url("agent"))                          # anything else falls through
+        self.assertEqual(len(self.tmux_calls("display-menu")), 1)
+
+
 class TestAgentEndToEnd(ShellHarness):
     """HUD → pane map → handler → state/events files → HUD. The handler
     stamps real time, so the HUD renders at real time too."""
@@ -2141,6 +2255,9 @@ class TestAgentLink(PresenceCase):
         os.environ["TMUX"] = "/tmp/tmux-1000/default,4242,0"
 
     def agent_links(self, row):
+        return re.findall(r"\x1b\]8;;(retro-hud://card[^\x07]*)\x07(.*?)\x1b\]8;;\x07", row)
+
+    def name_links(self, row):
         return re.findall(r"\x1b\]8;;(retro-hud://agent[^\x07]*)\x07(.*?)\x1b\]8;;\x07", row)
 
     def test_sprite_is_linked_and_the_bubble_is_not(self):
@@ -2149,7 +2266,7 @@ class TestAgentLink(PresenceCase):
         self.actions_on()
         row = sl.render(self.payload(), 160, NOW)[0]
         (url, text), = self.agent_links(row)
-        self.assertEqual(url, "retro-hud://agent?pane=%257&sock=/tmp/tmux-1000/default")
+        self.assertEqual(url, "retro-hud://card?pane=%257&sock=/tmp/tmux-1000/default")
         self.assertIn(sl.strip_ansi(text), sl.SPRITES["alien"]["working"])
         self.assertIn("deploy finished", sl.strip_ansi(row))
         self.assertNotIn("deploy", "".join(t for _, t in self.agent_links(row)))
@@ -2159,6 +2276,32 @@ class TestAgentLink(PresenceCase):
         self.assertEqual(self.agent_links(sl.render(self.payload(), 160, NOW)[0]), [])
         os.environ["RETRO_HUD_ACTIONS"] = "1"
         self.assertEqual(self.agent_links(sl.render(self.payload(), 160, NOW)[0]), [])
+
+    def test_session_name_segment_links_to_the_agent_menu(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.actions_on()
+        payload = self.payload()
+        payload["session_name"] = "nova"
+        rows = sl.render(payload, 160, NOW)
+        links = self.name_links(rows[0])
+        self.assertEqual([u for u, _ in links], ["retro-hud://agent?pane=%257&sock=/tmp/tmux-1000/default"])
+        self.assertEqual(sl.strip_ansi(links[0][1]), "◈ nova")
+        self.assertEqual(self.name_links(rows[0] + rows[1]), links)
+        # the creature is the card's link, never the menu's
+        self.assertTrue(all(u.startswith("retro-hud://card?") for u, _ in self.agent_links(rows[0])))
+
+    def test_state_file_carries_the_card_facts(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        payload = self.payload(FULL)
+        sl.render(payload, 160, NOW)
+        st = self.state_file()
+        self.assertEqual(st["model"], "Fable 5")
+        self.assertEqual(st["effort"], "high")
+        self.assertEqual(st["dur_s"], 5432)
+        self.assertEqual((st["lines_add"], st["lines_del"]), (128, 37))
+        self.assertEqual(st["dir"], "some-long-project-name")
+        facts = sl.card_facts({"model": {"id": "claude-x"}, "cost": {"total_duration_ms": "bad"}})
+        self.assertEqual(facts, {"model": "claude-x"})
 
     def test_links_never_change_the_top_rule(self):
         self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
@@ -3220,8 +3363,8 @@ class TestCreatureFrame(CreatureCase):
         action = lambda name, text, extra="": sl.link("retro-hud://" + name, text)
         pres = {"mood": "working", "bubble": "ready", "since": NOW, "mood_since": None}
         head, row1 = sl._frame_creature(self.ROW, 120, True, 50, NOW, pres, self.LOOK, action)
-        self.assertEqual(row1.count("retro-hud://agent"), 1)
-        self.assertEqual(head.count("retro-hud://agent"), 1)
+        self.assertEqual(row1.count("retro-hud://card"), 1)
+        self.assertEqual(head.count("retro-hud://card"), 1)
         plain_head = sl.strip_ansi(head)
         self.assertIn("ready", plain_head)
         self.assertNotIn("ready\a", head)  # the bubble is outside the link
@@ -3704,7 +3847,7 @@ class TestTinyFrame(CreatureCase):
         action = lambda name, text, extra="": sl.link("retro-hud://" + name, text)
         pres = {"mood": "working", "bubble": "ready", "since": NOW, "mood_since": None}
         row1 = sl._frame_tiny(self.ROW, 120, True, 50, NOW, pres, self.LOOK, action)
-        self.assertEqual(row1.count("retro-hud://agent"), 1)
+        self.assertEqual(row1.count("retro-hud://card"), 1)
         self.assertNotIn("ready\a", row1)
 
     def test_hud_tiny_two_lines_rows_unchanged(self):
@@ -3794,7 +3937,7 @@ class TestBigFrame(CreatureCase):
         row2 = sl.NEON_GREEN + "└─" + sl.R + "y" * 10
         pres = {"mood": "working", "bubble": "ready", "since": NOW, "mood_since": None}
         r1, r2 = sl._frame_big(self.ROW1, row2, 120, True, 50, NOW, pres, self.LOOK, action)
-        self.assertEqual((r1.count("retro-hud://agent"), r2.count("retro-hud://agent")), (1, 1))
+        self.assertEqual((r1.count("retro-hud://card"), r2.count("retro-hud://card")), (1, 1))
         self.assertNotIn("ready\a", r1)
 
     def test_hud_big_is_two_lines_and_row_2_keeps_its_segments(self):

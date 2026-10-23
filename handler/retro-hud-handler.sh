@@ -5,8 +5,8 @@
 #
 #   retro-hud://<action>?pane=<tmux pane id>[&sock=<tmux socket>]
 #
-# actions: model effort ctx cost diff usage agent (see README, "Click
-# actions"). The URL is checked against a strict whitelist and every query
+# actions: model effort ctx cost diff usage agent card (see README, "Click
+# actions"; `card` is the creature's status card, `agent` its menu). The URL is checked against a strict whitelist and every query
 # value is validated before anything runs; rejected URLs are logged to
 # ~/.cache/retro-hud/handler.log and ignored. Any program can print a
 # link, so a URL is never trusted to pick the target: the pane must be
@@ -71,6 +71,25 @@ reject() {
     exit 0
 }
 
+# ── the right-click binding's two variables (see the header) ──
+MENU_FILE=""
+if [ -n "${RETRO_HUD_MENU_FILE:-}" ]; then
+    if [[ $RETRO_HUD_MENU_FILE =~ ^/[A-Za-z0-9._/-]+\.tmux$ ]]; then
+        MENU_FILE=$RETRO_HUD_MENU_FILE
+        rm -f "$MENU_FILE"    # a stale menu must never be sourced again
+    else
+        log "RETRO_HUD_MENU_FILE ignored: not a plain absolute .tmux path"
+    fi
+fi
+BOUND_CLIENT=""
+if [ -n "${RETRO_HUD_CLIENT:-}" ]; then
+    if [[ $RETRO_HUD_CLIENT =~ ^/dev/[A-Za-z0-9/._-]+$ ]]; then
+        BOUND_CLIENT=$RETRO_HUD_CLIENT
+    else
+        log "RETRO_HUD_CLIENT ignored: not a tty path"
+    fi
+fi
+
 if [ -f "$LOCAL_EXT" ]; then
     # It sees "$@"; returning (with any status) falls through to the
     # built-in actions, `exit` ends the click.
@@ -120,25 +139,6 @@ USAGE_URL="${RETRO_HUD_USAGE_URL:-${cfg_usage_url:-$DEFAULT_USAGE_URL}}"
 if ! [[ $USAGE_URL =~ ^https?://[^[:space:][:cntrl:]]+$ ]]; then
     log "config: RETRO_HUD_USAGE_URL is not an http(s) URL; using the default"
     USAGE_URL=$DEFAULT_USAGE_URL
-fi
-
-# ── the right-click binding's two variables (see the header) ──
-MENU_FILE=""
-if [ -n "${RETRO_HUD_MENU_FILE:-}" ]; then
-    if [[ $RETRO_HUD_MENU_FILE =~ ^/[A-Za-z0-9._/-]+\.tmux$ ]]; then
-        MENU_FILE=$RETRO_HUD_MENU_FILE
-        rm -f "$MENU_FILE"    # a stale menu must never be sourced again
-    else
-        log "RETRO_HUD_MENU_FILE ignored: not a plain absolute .tmux path"
-    fi
-fi
-BOUND_CLIENT=""
-if [ -n "${RETRO_HUD_CLIENT:-}" ]; then
-    if [[ $RETRO_HUD_CLIENT =~ ^/dev/[A-Za-z0-9/._-]+$ ]]; then
-        BOUND_CLIENT=$RETRO_HUD_CLIENT
-    else
-        log "RETRO_HUD_CLIENT ignored: not a tty path"
-    fi
 fi
 
 # ── tmux helpers ──
@@ -332,6 +332,40 @@ if op == "status":
                       "limit " + ("%d%%" % lim if lim is not None else "?"),
                       "$%.2f" % cost if cost is not None else "$?"]))
     sys.exit(0)
+if op == "card":
+    def num(k):
+        v = obj.get(k)
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool)
+        return v if ok and math.isfinite(v) else None
+    def span(sec):
+        sec = int(sec)
+        return "%ds" % sec if sec < 60 else "%dm" % (sec // 60) if sec < 3600 else "%dh%02dm" % (sec // 3600, sec % 3600 // 60)
+    def text(k, n=40):
+        v = obj.get(k)
+        return "".join(ch for ch in v if ch.isprintable())[:n] if isinstance(v, str) else None
+    label = {"working": "working", "yours": "your turn", "needs": "needs you",
+             "error": "error", "idle": "idle", "asleep": "asleep"}.get(obj.get("state"))
+    head = args[0] + " · " + (label or "no status yet")
+    since = num("since")
+    if label and since is not None:
+        head += " for " + span(max(0, time.time() - since))
+    print(head)
+    model, effort = text("model"), text("effort", 12)
+    if model or effort:
+        print(" · ".join(x for x in (model, "effort " + effort if effort else None) if x))
+    ctx, lim, cost, dur = num("ctx_pct"), num("limit_pct"), num("cost"), num("dur_s")
+    gauges = [("context %d%%" % ctx) if ctx is not None else None,
+              ("limit %d%%" % lim) if lim is not None else None,
+              ("$%.2f" % cost) if cost is not None else None,
+              span(dur) if dur is not None else None]
+    if any(gauges):
+        print(" · ".join(g for g in gauges if g))
+    add, rem, d = num("lines_add"), num("lines_del"), text("dir")
+    parts = [("+%d/-%d" % (add, rem)) if add is not None and rem is not None else None,
+             ("dir " + d) if d else None]
+    if any(parts):
+        print(" · ".join(x for x in parts if x))
+    sys.exit(0)
 if op == "creature":
     print("on" if isinstance(obj.get("creature"), str) else "off")
     sys.exit(0)
@@ -495,7 +529,7 @@ fi
 # ── URL form ──
 [ $# -eq 1 ] || reject "expected one argument, got $#"
 URL=$1
-re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent)(\?([A-Za-z0-9_=&%.:/~+-]*))?$'
+re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent|card)(\?([A-Za-z0-9_=&%.:/~+-]*))?$'
 [[ $URL =~ $re ]] || reject "$(printf '%q' "$URL")"
 ACTION=${BASH_REMATCH[1]}
 QUERY=${BASH_REMATCH[3]}
@@ -539,6 +573,71 @@ case $ACTION in
     model | effort | ctx | diff) require_active_pane "$PANE" ;;
     *) ;;  # cost checks in send_slash, agent in agent_target; usage targets no pane
 esac
+
+# ── the status card (retro-hud://card): the creature's own popup ──
+# One tip per ten minutes, generic on purpose; the card's facts come from
+# the state file (`state_py card`). Any key closes it (a click cannot: tmux
+# hands a popup no mouse unless it asks, and asking would let the opening
+# right-click's release close it). `m` exits the popup with status 10,
+# which display-popup -E hands back here, and the agent menu opens THEN:
+# a menu asked for while a popup is up is silently dropped by tmux.
+TIPS=(
+    "right-click any HUD segment for its menu; q or Esc closes"
+    "context gauge red near 80%? /compact before it fills"
+    "settings.json refreshInterval 1: the creature moves each second"
+    "RETRO_HUD_CREATURE=big or tall grows it; 0 is the text alien"
+    "agent menu: quiet 1h mutes bubbles, wave makes it wave back"
+    "RETRO_HUD_HOME_URL adds a ⌂ jump-home link to row 2"
+    "/model and /effort: right-click the model name or effort dot"
+    "the \$ field alternates with the session duration every 30 s"
+)
+
+vis_width() {  # longest display width of the lines on stdin (ANSI stripped)
+    python3 -I -c '
+import re, sys, unicodedata
+w = 0
+for line in sys.stdin.read().split("\n"):
+    line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+    w = max(w, sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in line))
+print(w)'
+}
+
+show_card() {  # pane; after agent_target
+    local pane=$1 body tip file runner w h cols url
+    if ! safe_path "$SELF" || ! safe_path "$LOG_DIR"; then
+        log "card refused: unsafe handler or cache path; install them under plain paths"
+        exit 0
+    fi
+    body=$(state_py card "$AGENT_NAME") || body="$AGENT_NAME · no status yet"
+    tip=${TIPS[$(( $(date +%s) / 600 % ${#TIPS[@]} ))]}
+    mkdir -p "$LOG_DIR" 2>/dev/null
+    file=$(mktemp "$LOG_DIR/card.XXXXXX") && runner=$(mktemp "$LOG_DIR/card.XXXXXX.sh") || {
+        log "card: cannot write under $LOG_DIR"; exit 0; }
+    {
+        printf '\033[1m%s\033[0m\n' "${body%%$'\n'*}"
+        [ "$body" = "${body%%$'\n'*}" ] || printf '%s\n' "${body#*$'\n'}"
+        printf '\n\033[2mtip: %s\033[0m\n' "$tip"
+        printf '\033[2m%s\033[0m\n' "any key closes · m: menu"
+    } >"$file"
+    printf '#!/bin/bash\ncat %s\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' \
+        "'$file'" >"$runner"
+    w=$(( $(vis_width <"$file") + 4 ))
+    h=$(( $(wc -l <"$file") + 2 ))
+    read -r cols rows < <(tm display -p -c "$CLIENT" '#{client_width} #{client_height}' 2>/dev/null) || cols="" rows=""
+    [[ ${cols:-} =~ ^[0-9]+$ ]] || cols=80
+    [[ ${rows:-} =~ ^[0-9]+$ ]] || rows=24
+    [ "$w" -le $((cols - 2)) ] || w=$((cols - 2))
+    [ "$w" -ge 24 ] || w=24
+    [ "$h" -le $((rows - 2)) ] || h=$((rows - 2))
+    local rc=0
+    tm display-popup -c "$CLIENT" -w "$w" -h "$h" -T " $AGENT_NAME " -E "bash '$runner'" || rc=$?
+    rm -f "$file" "$runner"
+    if [ "$rc" = 10 ]; then
+        agent_menu "$pane"        # the popup is gone; now a menu can open (keyboard: no mouse event)
+    elif [ "$rc" != 0 ]; then
+        log "display-popup failed ($rc)"
+    fi
+}
 
 case $ACTION in
     usage)
@@ -600,6 +699,14 @@ case $ACTION in
     agent)
         agent_target "$PANE"
         agent_menu "$PANE"
+        ;;
+    card)
+        if [ -n "$MENU_FILE" ]; then   # inside the binding: the popup waits, the chain must not
+            ( RETRO_HUD_MENU_FILE="" exec "$SELF" "$URL" ) </dev/null >/dev/null 2>&1 &
+            exit 0
+        fi
+        agent_target "$PANE"
+        show_card "$PANE"
         ;;
     # ── agent action: END ──
 esac

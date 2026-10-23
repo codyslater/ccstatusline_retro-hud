@@ -293,7 +293,12 @@ messages. The installer sets it to 5; 1 makes the creature move every
 second (see above).
 
 **Click the creature.** With [click actions](#click-actions) on, the
-creature (not its bubble) is a link to a small menu: **wave** (appends a
+creature (not its bubble) is a link to its **status card**
+(`retro-hud://card`): a popup with the session's state and how long,
+model and effort, context %, worst limit %, cost and duration, lines and
+directory, and one tip (a different one every ten minutes); any key
+closes it, `m` opens the menu below. The session-name segment (`◈ name`,
+row 1) is the link to that small menu: **wave** (appends a
 10s `wave` event, so it waves back), **quiet 1h** (sets `mute_until` an
 hour ahead: no bubbles until then), **sprite ▸** (blob / beast / alien /
 bot writes `sprite` to the state file; *default* removes it and the env
@@ -328,7 +333,8 @@ a slash command.
 | `$` cost | types `/cost` |
 | `+N/-M` lines | read-only popup: `git diff --stat`, then the diff in `less` |
 | rate-limit gauges | opens your usage page (`RETRO_HUD_USAGE_URL`) in the browser |
-| the creature | wave · quiet 1h · sprite ▸ · size ▸ · reroll · status (see [Agent presence](#agent-presence)) |
+| the creature | its status card: state, model, effort, context, limit, cost, duration, lines, dir, a tip; `m` opens the menu (see [Agent presence](#agent-presence)) |
+| session name (`◈ name`) | wave · quiet 1h · sprite ▸ · size ▸ · reroll · status |
 
 The branch badge and PR number keep their GitHub links.
 
@@ -395,8 +401,8 @@ the composer"). Clicking mid-turn is fine: Claude Code queues the input.
 retro-hud://<action>?pane=<tmux pane id>[&sock=<tmux socket path>]
 ```
 
-`<action>` is `model`, `effort`, `ctx`, `cost`, `diff`, `usage`, or
-`agent`. Values are percent-encoded (`pane=%2512` is pane
+`<action>` is `model`, `effort`, `ctx`, `cost`, `diff`, `usage`,
+`agent`, or `card`. Values are percent-encoded (`pane=%2512` is pane
 `%12`). `sock` is the server socket from `$TMUX`, so non-default servers
 (`tmux -L`) are addressed correctly. The `effort` link also carries
 `cur=<level>` so the menu can mark the current level. `usage` links have
