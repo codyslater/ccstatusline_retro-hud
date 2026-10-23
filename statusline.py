@@ -101,6 +101,52 @@ ALIEN_FRAMES = (("/o.o\\", "/-.-\\"),
                 ("\\o.o/", "\\O.O/"))
 ALIEN_SPEEDS = (1, 2, 4)  # rule-cells per 30s tick
 
+# Agent presence: one sprite per mood, two frames each, all width 5. The
+# gauge moods (calm / agitated / red) of the alien are ALIEN_FRAMES; the
+# rest follow what the session's agent is doing. Every mood's first frame
+# is unique within its set, so a glance tells them apart.
+SPRITES = {
+    "alien": {
+        "calm": ALIEN_FRAMES[0], "agitated": ALIEN_FRAMES[1], "red": ALIEN_FRAMES[2],
+        "error": ("/>.<\\", "\\>.</"),     # flinches
+        "working": ("/o.o/", "\\o.o\\"),   # hustles
+        "yours": ("\\^.^/", "/^.^\\"),     # waves: your turn
+        "needs": ("/o.o?", "\\o.o?"),      # beckons: a prompt is waiting
+        "idle": ("/-_-\\", "/-_-\\"),      # dozes
+        "asleep": ("/_._\\", "/_._\\"),
+    },
+    "cat": {
+        "calm": ("=^.^=", "=-.-="), "agitated": (">^.^<", ">-.-<"),
+        "red": ("\\^O^/", "/^O^\\"), "error": ("=>.<=", "=x.x="),
+        "working": ("=^.^/", "\\^.^="), "yours": ("\\^w^/", "=^w^="),
+        "needs": ("=^.^?", "=^o^?"), "idle": ("=-_-=", "=-_-="),
+        "asleep": ("=_._=", "=_._="),
+    },
+    "robot": {
+        "calm": ("[o_o]", "[-_-]"), "agitated": ("{o_o}", "{-_-}"),
+        "red": ("\\[O]/", "/[O]\\"), "error": ("[x_x]", "[X_X]"),
+        "working": ("[o_o>", "<o_o]"), "yours": ("[^_^]", "[^_^/"),
+        "needs": ("[o_o?", "[?_?]"), "idle": ("[=_=]", "[=_=]"),
+        "asleep": ("[_._]", "[_._]"),
+    },
+    "ghost": {
+        "calm": ("(o.o)", "(-.-)"), "agitated": ("(O.O)", "(o.O)"),
+        "red": ("\\(O)/", "/(O)\\"), "error": ("(x.x)", "(>.<)"),
+        "working": ("(o.o~", "~o.o)"), "yours": ("(^.^)", "(^.^/"),
+        "needs": ("(o.o?", "(?.?)"), "idle": ("(-_-)", "(-_-)"),
+        "asleep": ("(_._)", "(_._)"),
+    },
+}
+# rule-cells per 10s tick; 0 parks the sprite where it was when the mood began
+MOOD_SPEEDS = {"calm": 1, "agitated": 2, "red": 4, "error": 2, "working": 3,
+               "yours": 1, "needs": 0, "idle": 0, "asleep": 0}
+WAVE_S = 30  # "yours" waves in place this long before cruising again
+MOOD_COLORS = {"calm": NEON_GREEN, "agitated": NEON_ORG, "red": NEON_RED,
+               "error": NEON_PINK, "working": NEON_CYAN, "yours": NEON_GREEN,
+               "needs": NEON_YEL, "idle": "\033[38;5;65m", "asleep": DIM}
+BUBBLE = "\033[38;5;245m"  # dim speech-bubble text on the rule
+BUBBLE_MAX = 18            # visible chars of bubble text
+
 # How many cells the terminal advances for emoji (EAW Wide/Fullwidth).
 # Correct terminals use 2; some WSL/VS Code setups advance only 1 —
 # RETRO_HUD_EMOJI=1 makes our accounting match them.
@@ -479,13 +525,55 @@ def _join(prefix, segs):
     return prefix + SEP.join(s for s in segs if s)
 
 
-def _frame(row, cols, corner, frame_on, alien_pct=None, now=0):
+def pick_mood(gauge_pct, state):
+    """Mood for this refresh: red-zone gauge → error → agitated gauge →
+    what the agent is doing → calm."""
+    if gauge_pct >= RED_PCT:
+        return "red"
+    if state == "error":
+        return "error"
+    if gauge_pct >= WARN_PCT:
+        return "agitated"
+    if state in ("needs", "working", "yours", "idle", "asleep"):
+        return state
+    return "calm"
+
+
+def _place_bubble(pos, span, text, moving_right):
+    """(side, text) for a bubble beside a sprite at `pos` on a `span` rule:
+    side is 1 (after the sprite), -1 (before it) or 0 (no room)."""
+    room = {1: span - pos, -1: pos}  # rule cells free on each side
+    need = 1 + vwidth(text)          # the ╴ glyph + text
+    for side in ((1, -1) if moving_right else (-1, 1)):
+        if room[side] >= need:
+            return side, text
+    side = 1 if room[1] >= room[-1] else -1
+    if room[side] < 3:  # glyph + 2 chars, or nothing
+        return 0, ""
+    fit = room[side] - 1
+    if fit >= 6:
+        return side, trunc(text, fit)
+    out = ""  # too tight for a ".." suffix: a clean cut reads better
+    for ch in text:
+        if vwidth(out + ch) > fit:
+            break
+        out += ch
+    return (side, out) if out else (0, "")
+
+
+def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None):
     """Pad with a dim rule and close the frame at the right edge.
 
     When alien_pct is given (and the rule is long enough), a text-art
-    alien patrols the rule: it ping-pongs along it, blinking each 30s
+    alien patrols the rule: it ping-pongs along it, blinking each 10s
     tick, walks faster as the worst gauge climbs, and its face and
     color escalate green → amber → red with that gauge's zone.
+
+    `pres` (agent presence) overrides the gauge-only behaviour with
+    {"mood", "bubble", "since", "sprite"}: the mood picks frames, color
+    and speed from SPRITES / MOOD_SPEEDS / MOOD_COLORS, and a bubble is
+    drawn on the rule beside the sprite, in its travel direction. The
+    bubble takes rule cells, never adds any: the frame math is unchanged.
     """
     gap = cols - vislen(row)
     if not frame_on or gap < 2:
@@ -493,15 +581,37 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0):
     track = gap - 2  # rule cells between the leading space and the corner
     fill = "─" * track
     if alien_pct is not None and track >= 10:
-        mood = 0 if alien_pct < WARN_PCT else (1 if alien_pct < RED_PCT else 2)
         tick = now // 10  # struts every 10s; visible with a short refreshInterval
-        sprite = ALIEN_FRAMES[mood][tick % 2]
-        color = (NEON_GREEN, NEON_ORG, NEON_RED)[mood]
+        if pres is None:
+            mood = 0 if alien_pct < WARN_PCT else (1 if alien_pct < RED_PCT else 2)
+            sprite = ALIEN_FRAMES[mood][tick % 2]
+            color = (NEON_GREEN, NEON_ORG, NEON_RED)[mood]
+            speed, bubble = ALIEN_SPEEDS[mood], ""
+        else:
+            mood = pres.get("mood") if pres.get("mood") in MOOD_SPEEDS else "calm"
+            frames = SPRITES.get(pres.get("sprite"), SPRITES["alien"])[mood]
+            sprite, color = frames[tick % 2], MOOD_COLORS[mood]
+            since = int(pres.get("since") or 0)
+            speed = MOOD_SPEEDS[mood]
+            if mood == "yours" and now - since < WAVE_S:
+                speed = 0
+            if speed == 0:  # park where a calm cruise stood when the mood began
+                tick = since // 10
+                speed = 1
+            bubble = pres.get("bubble") or ""
         span = track - len(sprite)
-        t = tick * ALIEN_SPEEDS[mood] % (2 * span)
+        t = tick * speed % (2 * span)
         pos = t if t <= span else 2 * span - t
-        fill = "{}{}{}{}{}{}".format("─" * pos, R + color, sprite,
-                                     R + RULE, "─" * (span - pos), "")
+        side, bubble = _place_bubble(pos, span, bubble, t < span) if bubble else (0, "")
+        bw = 1 + vwidth(bubble) if side else 0
+        left = "─" * (pos - bw if side == -1 else pos)
+        right = "─" * (span - pos - bw if side == 1 else span - pos)
+        if side == -1:
+            left += R + BUBBLE + bubble + R + RULE + "╶"
+        mid = R + color + sprite + R + RULE
+        if side == 1:
+            mid += "╴" + R + BUBBLE + bubble + R + RULE
+        fill = left + mid + right
     return "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, corner, R)
 
 

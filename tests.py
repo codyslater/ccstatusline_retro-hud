@@ -568,6 +568,115 @@ class TestTranscriptTail(unittest.TestCase):
         self.assertEqual(sl.agent_state(entries, NOW)[0], "yours")
 
 
+class TestMoods(unittest.TestCase):
+    MOODS = ("calm", "agitated", "red", "error", "working", "yours", "needs",
+             "idle", "asleep")
+
+    def test_every_sprite_set_has_every_mood_at_width_5(self):
+        self.assertEqual(set(sl.SPRITES), {"alien", "cat", "robot", "ghost"})
+        for name, moods in sl.SPRITES.items():
+            self.assertEqual(set(moods), set(self.MOODS), name)
+            for mood, frames in moods.items():
+                self.assertEqual(len(frames), 2, (name, mood))
+                for f in frames:
+                    self.assertEqual(sl.vwidth(f), 5, (name, mood, f))
+                    self.assertTrue(f.isprintable() and f.isascii(), (name, mood, f))
+            # each mood owns a first frame no other mood in the set uses
+            firsts = [moods[m][0] for m in self.MOODS]
+            self.assertEqual(len(set(firsts)), len(firsts), name)
+        for m in self.MOODS:
+            self.assertIn(m, sl.MOOD_SPEEDS)
+            self.assertIn(m, sl.MOOD_COLORS)
+
+    def test_alien_keeps_its_gauge_frames(self):
+        a = sl.SPRITES["alien"]
+        self.assertEqual((a["calm"], a["agitated"], a["red"]), sl.ALIEN_FRAMES)
+
+    def test_mood_precedence(self):
+        table = [
+            # (worst gauge %, agent state, mood)
+            (95, "error", "red"),        # red-zone gauge beats everything
+            (95, "working", "red"),
+            (50, "error", "error"),      # then a burst of errors
+            (80, "error", "error"),
+            (80, "working", "agitated"),  # then an agitated gauge
+            (80, "needs", "agitated"),
+            (50, "needs", "needs"),      # then what the agent is doing
+            (50, "working", "working"),
+            (50, "yours", "yours"),
+            (50, "idle", "idle"),
+            (50, "asleep", "asleep"),
+            (50, "unknown", "calm"),     # else calm
+            (0, None, "calm"),
+        ]
+        for pct, state, want in table:
+            self.assertEqual(sl.pick_mood(pct, state), want, (pct, state))
+
+
+class TestFrameBubble(unittest.TestCase):
+    ROW = sl.NEON_GREEN + "┌─" + sl.R + "x" * 20
+
+    def frame(self, cols, mood="working", bubble="", now=NOW, since=NOW, sprite="alien"):
+        pres = {"mood": mood, "bubble": bubble, "since": since, "sprite": sprite}
+        return sl._frame(self.ROW, cols, "┐", True, 50, now, pres)
+
+    def test_frame_math_unchanged_with_a_bubble(self):
+        for mood in TestMoods.MOODS:
+            for bubble in ("", "ready", "y" * 18, "日本語のふきだし"):
+                for cols in range(24, 241, 7):
+                    for now in (NOW, NOW + 10, NOW + 170, NOW + 3333):
+                        row = self.frame(cols, mood, bubble, now)
+                        plain = sl.strip_ansi(row)
+                        bare = sl.strip_ansi(sl._frame(self.ROW, cols, "┐", True))
+                        self.assertEqual(sl.vislen(row), cols, (mood, bubble, cols, now))
+                        self.assertEqual(sl.vwidth(plain), sl.vwidth(bare))
+                        self.assertEqual(plain[:23], bare[:23])  # row + leading space
+                        self.assertTrue(plain.endswith("┐"), (mood, bubble, cols))
+
+    def test_bubble_sits_beside_the_sprite(self):
+        plain = sl.strip_ansi(self.frame(120, "yours", "ready", NOW))
+        self.assertRegex(plain, r"(\\\^\.\^/|/\^\.\^\\)╴ready─|ready╶(\\\^\.\^/|/\^\.\^\\)")
+
+    def test_bubble_flips_side_at_the_end_of_the_rule(self):
+        # sweep a whole patrol: the full bubble is always shown
+        for now in range(NOW, NOW + 3000, 10):
+            plain = sl.strip_ansi(self.frame(80, "working", "ready", now))
+            self.assertIn("ready", plain, now)
+
+    def test_bubble_shrinks_on_a_short_rule_and_drops_when_no_room(self):
+        # a 10-cell track (the minimum for a sprite) leaves 5 rule cells
+        base = sl.vislen(self.ROW) + 2
+        for now in range(NOW, NOW + 200, 10):
+            plain = sl.strip_ansi(self.frame(base + 10, "working", "abcdefgh", now))
+            self.assertIn("ab", plain)
+            self.assertNotIn("abcdefgh", plain)
+        # below that, no sprite and no bubble
+        plain = sl.strip_ansi(self.frame(base + 9, "working", "abcdefgh"))
+        self.assertNotIn("o.o", plain)
+        self.assertNotIn("ab", plain)
+
+    def test_parked_moods_hold_still(self):
+        spots = {sl.strip_ansi(self.frame(120, "needs", "", NOW + d, since=NOW)).find("o.o?")
+                 for d in (20, 500, 4000)}
+        self.assertEqual(len(spots), 1)
+        self.assertNotIn(-1, spots)
+
+    def test_yours_waves_in_place_then_cruises(self):
+        spots = {sl.strip_ansi(self.frame(120, "yours", "", NOW + d, since=NOW)).find("^.^")
+                 for d in (0, 10, 20)}
+        self.assertEqual(len(spots), 1)
+        later = {sl.strip_ansi(self.frame(120, "yours", "", NOW + d, since=NOW)).find("^.^")
+                 for d in (40, 50, 60, 70)}
+        self.assertGreater(len(later), 1)
+
+    def test_sprite_set_used(self):
+        plain = sl.strip_ansi(self.frame(120, "calm", "", NOW, sprite="robot"))
+        self.assertTrue("[o_o]" in plain or "[-_-]" in plain)
+        # an unknown set falls back to the alien
+        plain = sl.strip_ansi(self.frame(120, "calm", "", NOW, sprite="dragon"))
+        self.assertTrue("/o.o\\" in plain or "/-.-\\" in plain)
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")
