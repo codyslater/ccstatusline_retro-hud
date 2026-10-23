@@ -3,12 +3,15 @@
 #
 # Your desktop runs this with ONE argument, the clicked URL:
 #
-#   retro-hud://<action>?pane=<tmux pane id>&cwd=<dir>[&sock=<tmux socket>]
+#   retro-hud://<action>?pane=<tmux pane id>[&sock=<tmux socket>]
 #
 # actions: model effort ctx cost diff usage agent (see README, "Click
 # actions"). The URL is checked against a strict whitelist and every query
 # value is validated before anything runs; rejected URLs are logged to
-# ~/.cache/retro-hud/handler.log and ignored. Menu items call this script
+# ~/.cache/retro-hud/handler.log and ignored. Any program can print a
+# link, so a URL is never trusted to pick the target: the pane must be
+# the clicking client's active pane and run `claude`, and the diff runs
+# in the directory tmux reports for that pane. Menu items call this script
 # back in an internal form that carries only validated tokens:
 #
 #   retro-hud-handler.sh do [-S <sock>] send <pane> <command> [<arg>]
@@ -146,10 +149,24 @@ slash_text() {
     esac
 }
 
+# A link can be printed by anything in any pane, so it may only act on the
+# pane the user is looking at: the clicking client's active pane.
+require_active_pane() {
+    local pane=$1 active
+    need_client
+    active=$(tm display -p -c "$CLIENT" '#{pane_id}' 2>/dev/null) || active=""
+    if [ "$active" != "$pane" ]; then
+        log "refused: link targets $pane, active pane is ${active:-?}"
+        tm display-message -c "$CLIENT" "retro-hud: link targets a different pane; ignored" || true
+        exit 0
+    fi
+}
+
 send_slash() {  # pane, command, [arg]
     local pane=$1 text current
     shift
     text=$(slash_text "$@") || reject "send: $(printf '%q ' "$@")"
+    require_active_pane "$pane"
     current=$(tm display -p -t "$pane" '#{pane_current_command}' 2>/dev/null) || current=""
     if [ "$current" != "claude" ]; then
         log "send refused: pane $pane runs '${current:-?}', not claude"
@@ -205,7 +222,7 @@ urldecode() {  # the trailing x keeps decoded trailing newlines visible
     printf x
 }
 
-PANE="" CWD="" CUR="" has_cwd=0 has_sock=0
+PANE="" CUR="" has_sock=0
 IFS='&' read -ra pairs <<<"$QUERY"
 for pair in "${pairs[@]}"; do
     [[ $pair == *=* ]] || continue
@@ -214,10 +231,11 @@ for pair in "${pairs[@]}"; do
     v=${v%x}
     case $k in
         pane) PANE=$v ;;
-        cwd) CWD=$v has_cwd=1 ;;
         sock) SOCK=$v has_sock=1 ;;
         cur) CUR=$v ;;
-        *) ;;  # unknown keys are ignored, so the contract can grow
+        # unknown keys (including a `cwd`) are ignored, so the contract can
+        # grow; directories always come from tmux, never from a link
+        *) ;;
     esac
 done
 
@@ -225,16 +243,17 @@ case $ACTION in usage | agent) need_pane=0 ;; *) need_pane=1 ;; esac
 if [ "$need_pane" = 1 ] || [ -n "$PANE" ]; then
     [[ $PANE =~ ^%[0-9]+$ ]] || reject "$ACTION: bad pane $(printf '%q' "$PANE")"
 fi
-if [ "$has_cwd" = 1 ] || [ "$ACTION" = diff ]; then
-    [[ $CWD == /* && $CWD != *[[:cntrl:]]* ]] && [ -d "$CWD" ] ||
-        reject "$ACTION: bad cwd $(printf '%q' "$CWD")"
-fi
 if [ "$has_sock" = 1 ]; then
     safe_path "$SOCK" && [ -S "$SOCK" ] || reject "$ACTION: bad sock $(printf '%q' "$SOCK")"
 fi
 if [ -n "$CUR" ]; then
     valid_level "$CUR" || reject "$ACTION: bad cur $(printf '%q' "$CUR")"
 fi
+
+case $ACTION in
+    model | effort | ctx | diff) require_active_pane "$PANE" ;;
+    *) ;;  # cost checks in send_slash; usage and agent target no pane
+esac
 
 case $ACTION in
     usage)
@@ -273,9 +292,19 @@ case $ACTION in
             "/clear…" l "$(menu_cmd confirm-clear "$PANE")"
         ;;
     diff)
-        need_client
-        tm display-popup -c "$CLIENT" -d "$CWD" -w 90% -h 90% -T " git diff (read-only) " -E \
-            "{ git --no-pager diff --stat --color=always; echo; git --no-pager diff --color=always; } 2>&1 | LESSSECURE=1 less -R" ||
+        dir=$(tm display -p -t "$PANE" '#{pane_current_path}' 2>/dev/null) || dir=""
+        if ! [[ $dir == /* && $dir != *[[:cntrl:]]* ]] || ! [ -d "$dir" ]; then
+            log "diff: pane $PANE has no usable directory"
+            exit 0
+        fi
+        # A fixed command string: the directory travels as -d, never as
+        # shell text. The repo's own config must not run anything, so the
+        # config-driven program hooks (fsmonitor, external diff, textconv,
+        # pager) are switched off, and less runs in secure mode.
+        git_safe="GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false"
+        git_safe+=" -c diff.external= -c core.pager= --no-pager diff --no-ext-diff --no-textconv"
+        tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) " -E \
+            "{ $git_safe --stat --color=always; echo; $git_safe --color=always; } 2>&1 | LESSSECURE=1 less -R" ||
             log "display-popup failed"
         ;;
     # ── agent action: BEGIN (reserved; its menu arrives in a later release) ──

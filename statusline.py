@@ -193,9 +193,10 @@ def link(url, text):
 _PANE_RE = re.compile(r"%[0-9]+\Z")
 
 
-def action_query(cwd):
-    """Query for retro-hud://<action> links: pane, cwd and, when the
-    statusline runs under a non-default tmux server, its socket.
+def action_query():
+    """Query for retro-hud://<action> links: the tmux pane and its server's
+    socket. No directory: the handler asks tmux for the pane's own path,
+    so a link printed by anything else cannot point git elsewhere.
 
     Empty when $TMUX_PANE is missing or malformed — we are not inside
     tmux, so nothing can be typed into this session.
@@ -203,14 +204,14 @@ def action_query(cwd):
     pane = os.environ.get("TMUX_PANE", "")
     if not _PANE_RE.match(pane):
         return ""
-    q = "pane={}&cwd={}".format(quote(pane, safe=""), quote(cwd, safe="/"))
+    q = "pane=" + quote(pane, safe="")
     sock = os.environ.get("TMUX", "").split(",")[0]
     if sock:
         q += "&sock=" + quote(sock, safe="/")
     return q
 
 
-def make_action(cwd):
+def make_action():
     """Return action(name, text, extra="") for this render.
 
     Off (the default) it returns text untouched, so the output is
@@ -220,7 +221,7 @@ def make_action(cwd):
     """
     if os.environ.get("RETRO_HUD_ACTIONS") != "1":
         return lambda name, text, extra="": text
-    query = action_query(cwd)
+    query = action_query()
 
     def action(name, text, extra=""):
         if name == "usage":
@@ -485,7 +486,7 @@ def render(data, cols, now):
     branch = str(data.get("_branch_override") or "") or git_branch(cwd)
     gh_url = repo_url(data, cwd, branch) if branch else ""
     dir_name = os.path.basename(cwd.rstrip(os.sep)) or cwd
-    action = make_action(cwd)
+    action = make_action()
 
     # ── gauge widths scale with the terminal ──
     ctx_len = clamp(cols // 20, 4, 10)

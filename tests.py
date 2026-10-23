@@ -3,6 +3,7 @@
 import copy
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -406,8 +407,7 @@ class TestClickActionLinks(unittest.TestCase):
             220: "e8845c761adb2e5500a400a976366ef11baaae59ec0b3e2d7751e0c1051c8b75"},
     }
     KEYS = ("RETRO_HUD_ACTIONS", "TMUX_PANE", "TMUX", "RETRO_HUD_HOME_URL")
-    Q = ("pane=%257&cwd=/home/u/projects/some-long-project-name"
-         "&sock=/tmp/tmux-1000/default")
+    Q = "pane=%257&sock=/tmp/tmux-1000/default"
 
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in self.KEYS}
@@ -497,19 +497,24 @@ class TestClickActionLinks(unittest.TestCase):
         os.environ["RETRO_HUD_ACTIONS"] = "1"
         os.environ["TMUX_PANE"] = "%12"
         url = self.links()["cost"][0][1]
-        self.assertEqual(
-            url, "retro-hud://cost?pane=%2512&cwd=/home/u/projects/some-long-project-name")
+        self.assertEqual(url, "retro-hud://cost?pane=%2512")
 
-    def test_cwd_is_percent_encoded(self):
+    def test_links_never_carry_the_cwd(self):
+        # The handler asks tmux for the pane's directory instead: a link
+        # must not be able to point git at an arbitrary directory.
         os.environ["RETRO_HUD_ACTIONS"] = "1"
         os.environ["TMUX_PANE"] = "%1"
-        payload = copy.deepcopy(MINIMAL)
+        os.environ["TMUX"] = "/tmp/my sock#1,1,0"
+        payload = copy.deepcopy(FULL)
         payload["workspace"]["current_dir"] = "/tmp/a b&c=d#e?f%gé"
-        url = self.links(payload)["ctx"][0][1]
-        self.assertEqual(
-            url, "retro-hud://ctx?pane=%251&cwd=/tmp/a%20b%26c%3Dd%23e%3Ff%25g%C3%A9")
-        # the reference handler's whitelist accepts every URL the HUD emits
-        self.assertRegex(url, r"^retro-hud://ctx\?[A-Za-z0-9_=&%.:/~+-]*$")
+        for name, hits in self.links(payload).items():
+            for _, url, _ in hits:
+                self.assertNotIn("cwd", url)
+                self.assertNotIn("/tmp/a", url)
+                # the reference handler's whitelist accepts every URL the HUD emits
+                self.assertRegex(url, r"^retro-hud://[a-z]+(\?[A-Za-z0-9_=&%.:/~+-]*)?$")
+        self.assertEqual(self.links(payload)["cost"][0][1],
+                         "retro-hud://cost?pane=%251&sock=/tmp/my%20sock%231")
 
     def test_effort_link_omits_unknown_level(self):
         os.environ["RETRO_HUD_ACTIONS"] = "1"
@@ -548,7 +553,10 @@ if cmd[:1] == ["list-clients"]:
     sys.stdout.write(os.environ.get("FAKE_TMUX_CLIENTS",
                      "100 /dev/pts/1\n300 /dev/pts/3\n200 /dev/pts/2\n"))
 elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd:
-    sys.stdout.write(os.environ.get("FAKE_TMUX_PANE_CMD", "claude") + "\n")
+    answer = {"#{pane_current_command}": os.environ.get("FAKE_TMUX_PANE_CMD", "claude"),
+              "#{pane_current_path}": os.environ.get("FAKE_TMUX_PANE_PATH", ""),
+              "#{pane_id}": os.environ.get("FAKE_TMUX_ACTIVE_PANE", "%7")}
+    sys.stdout.write(answer.get(cmd[-1], "") + "\n")
 elif cmd[:1] == ["show-options"]:
     sys.stdout.write(os.environ.get("FAKE_TMUX_FEATURES", "") + "\n")
 '''
@@ -602,6 +610,7 @@ class ShellHarness(unittest.TestCase):
         return env
 
     def run_handler(self, *args, **extra):
+        extra.setdefault("FAKE_TMUX_PANE_PATH", self.work)
         return subprocess.run(["bash", HANDLER] + list(args), env=self.env(extra),
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               timeout=20)
@@ -634,7 +643,6 @@ class ShellHarness(unittest.TestCase):
     def url(self, action, **q):
         from urllib.parse import quote
         q.setdefault("pane", "%7")
-        q.setdefault("cwd", self.work)
         return "retro-hud://{}?{}".format(action, "&".join(
             "{}={}".format(k, quote(v, safe="/")) for k, v in q.items()))
 
@@ -675,12 +683,8 @@ class TestHandlerRejects(ShellHarness):
     def test_crafted_pane(self):
         for pane in ("%7;touch x", "7", "%", "%7 ", "%%7", "%7\n%8"):
             self.assert_rejected(self.url("cost", pane=pane))
-        self.assert_rejected("retro-hud://cost?cwd=/tmp")   # pane required
-
-    def test_crafted_cwd(self):
-        for cwd in ("/no/such/dir", "relative", self.work + "\n/tmp", ""):
-            self.assert_rejected(self.url("diff", cwd=cwd))
-        self.assert_rejected("retro-hud://diff?pane=%257")  # diff needs cwd
+        self.assert_rejected("retro-hud://cost")   # pane required
+        self.assert_rejected("retro-hud://diff")
 
     def test_crafted_sock(self):
         self.assert_rejected(self.url("cost", sock=self.work))        # a dir
@@ -717,12 +721,32 @@ class TestHandlerActions(ShellHarness):
         self.assertTrue(any("no longer running Claude" in " ".join(m) for m in msgs), msgs)
 
     def test_send_verifies_the_clicked_pane(self):
-        self.run_handler(self.url("cost", pane="%42"))
-        probe = [c for c in self.tmux_calls("display") if "-p" in c]
+        self.run_handler(self.url("cost", pane="%42"), FAKE_TMUX_ACTIVE_PANE="%42")
+        probe = [c for c in self.tmux_calls("display") if "-t" in c]
         self.assertEqual(probe, [["display", "-p", "-t", "%42", "#{pane_current_command}"]])
+        active = [c for c in self.tmux_calls("display") if "-c" in c]
+        self.assertEqual(active, [["display", "-p", "-c", "/dev/pts/3", "#{pane_id}"]])
+
+    def test_link_for_another_pane_does_nothing(self):
+        # A link printed by something else could name a different Claude
+        # pane; only the clicking client's active pane is ever a target.
+        for action in ("cost", "model", "effort", "ctx", "diff"):
+            p = self.run_handler(self.url(action, pane="%8"))
+            self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.tmux_calls("send-keys"), [])
+        self.assertEqual(self.tmux_calls("display-menu"), [])
+        self.assertEqual(self.tmux_calls("display-popup"), [])
+        msgs = [" ".join(m) for m in self.tmux_calls("display-message")]
+        self.assertEqual(len(msgs), 5, msgs)
+        self.assertTrue(all("link targets a different pane" in m for m in msgs), msgs)
+
+    def test_do_send_checks_the_active_pane_too(self):
+        self.run_handler("do", "send", "%3", "cost")   # active pane is %7
+        self.assertEqual(self.tmux_calls("send-keys"), [])
 
     def test_do_send(self):
-        p = self.run_handler("do", "send", "%3", "effort", "xhigh")
+        p = self.run_handler("do", "send", "%3", "effort", "xhigh",
+                             FAKE_TMUX_ACTIVE_PANE="%3")
         self.assertEqual(p.returncode, 0, p.stderr.decode())
         self.assertEqual(self.tmux_calls("send-keys"),
                          [["send-keys", "-t", "%3", "-l", "/effort xhigh"],
@@ -800,17 +824,74 @@ class TestHandlerActions(ShellHarness):
                         cmd, r"^run-shell -b \"'" + re.escape(HANDLER) +
                         r"' do (-S '[^']*' )?(send|confirm-clear) '%7'( [A-Za-z0-9._:\[\]-]+)*\"$")
 
-    def test_diff_popup(self):
-        self.run_handler(self.url("diff"))
+    def diff_popup(self, *args, **extra):
+        self.run_handler(*args, **extra)
         popups = self.tmux_calls("display-popup")
-        self.assertEqual(len(popups), 1)
-        argv = popups[0]
+        self.assertEqual(len(popups), 1, self.log("tmux"))
+        return popups[0]
+
+    def test_diff_popup_runs_in_the_panes_own_directory(self):
+        # a cwd in the URL is ignored: the directory comes from tmux
+        argv = self.diff_popup(self.url("diff", cwd="/tmp"))
         self.assertEqual(argv[argv.index("-d") + 1], self.work)
         self.assertEqual(argv[argv.index("-c") + 1], "/dev/pts/3")
         self.assertIn("-E", argv)
-        self.assertIn("git --no-pager diff --stat", argv[-1])
-        self.assertNotIn(self.work, argv[-1])  # cwd never reaches a shell string
+        self.assertNotIn(self.work, argv[-1])  # the path never reaches a shell string
+        self.assertIn(["display", "-p", "-t", "%7", "#{pane_current_path}"],
+                      self.tmux_calls("display"))
         self.assertEqual(self.tmux_calls("send-keys"), [])
+
+    def test_diff_needs_a_real_pane_directory(self):
+        for path in ("", "relative", "/no/such/dir", self.work + "\n/tmp"):
+            self.run_handler(self.url("diff"), FAKE_TMUX_PANE_PATH=path)
+        self.assertEqual(self.tmux_calls("display-popup"), [])
+
+    def test_diff_git_is_hardened(self):
+        cmd = self.diff_popup(self.url("diff"))[-1]
+        for flag in ("GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0",
+                     "-c core.fsmonitor=false", "-c diff.external=", "-c core.pager=",
+                     "--no-pager", "--no-ext-diff", "--no-textconv", "LESSSECURE=1"):
+            self.assertIn(flag, cmd)
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_diff_popup_command_ignores_a_hostile_repo_config(self):
+        # Run the popup's exact command in a repo whose config tries to
+        # execute a program via fsmonitor, an external diff and textconv.
+        cmd = self.diff_popup(self.url("diff"))[-1]
+        marker = os.path.join(self.tmp, "pwned")
+        evil = os.path.join(self.tmp, "evil.sh")
+        with open(evil, "w") as f:
+            f.write("#!/bin/sh\ntouch '{}'\n".format(marker))
+        os.chmod(evil, 0o755)
+        genv = self.env({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+                         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"})
+
+        def git(*a):
+            subprocess.run(["git"] + list(a), cwd=self.work, env=genv, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        git("init", "-q")
+        with open(os.path.join(self.work, "f.txt"), "w") as f:
+            f.write("one\n")
+        with open(os.path.join(self.work, ".gitattributes"), "w") as f:
+            f.write("*.txt diff=evil\n")
+        git("add", ".")
+        git("commit", "-qm", "x")
+        for key in ("core.fsmonitor", "diff.external", "diff.evil.textconv",
+                    "diff.evil.command", "core.pager"):
+            git("config", key, evil)
+        with open(os.path.join(self.work, "f.txt"), "w") as f:
+            f.write("two\n")
+        p = subprocess.run(["sh", "-c", cmd], cwd=self.work, env=genv,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=20)
+        out = sl.strip_ansi(p.stdout.decode())
+        self.assertFalse(os.path.exists(marker), out)
+        self.assertIn("+two", out)
+        # the same repo does run the hostile program for a plain git diff,
+        # so the assertion above is meaningful
+        subprocess.run(["git", "diff"], cwd=self.work, env=genv, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        self.assertTrue(os.path.exists(marker))
 
     def test_usage_opens_browser(self):
         self.run_handler("retro-hud://usage")
