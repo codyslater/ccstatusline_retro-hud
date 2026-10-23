@@ -47,6 +47,8 @@ parsed line by line, never sourced; unknown keys are ignored and logged:
 |-----|---------|--------|
 | `RETRO_HUD_MODELS` | `opus,sonnet,haiku` | comma list for the model menu; each entry may use letters, digits and `. _ : - [ ]` (e.g. `opus[1m]`) |
 | `RETRO_HUD_USAGE_URL` | `https://claude.ai/settings/usage` | page the rate-limit gauges open; must be `http(s)://` |
+| `RETRO_HUD_AGENT_NAME` | `agent` | title of the agent menu; letters, digits, space and `. _ -`, up to 24 |
+| `RETRO_HUD_CACHE_DIR` | `~/.cache/retro-hud` | where the agent menu finds the HUD's presence files; set it here only if you set it for the statusline too |
 
 ```
 # ~/.config/retro-hud/env

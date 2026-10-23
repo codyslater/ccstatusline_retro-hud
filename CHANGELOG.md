@@ -40,6 +40,19 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   failure means no bubbles, never a broken bar.
 - Sprite sets: `RETRO_HUD_SPRITE=alien|cat|robot|ghost`, every mood two
   frames at width 5.
+- **Click the alien** (with `RETRO_HUD_ACTIONS=1` in tmux): the sprite,
+  not its bubble, links to `retro-hud://agent`, and the reference
+  handler shows a menu: `wave` (appends a 10s `wave` event), `quiet 1h`
+  (sets `mute_until`), `sprite ▸` (alien / cat / robot / ghost, or
+  `default` to drop the override) and `status` (the state file's
+  snapshot as a tmux message). Edits to the state file are atomic and
+  keep every other key. The handler checks the active-pane and `claude`
+  rules as for the other actions and finds the session through
+  `<cache>/pane-<N>.sid`, which the HUD writes while click actions are
+  on. It reads `RETRO_HUD_AGENT_NAME` (menu title) and
+  `RETRO_HUD_CACHE_DIR` from its environment or `~/.config/retro-hud/env`.
+- An events-channel line with the text `wave` makes the sprite wave in
+  place for its `ttl` instead of showing a bubble.
 - Knobs: `RETRO_HUD_PRESENCE=0` (gauge-only alien, as before),
   `RETRO_HUD_AGENT_NAME`, `RETRO_HUD_QUIPS=0`, `RETRO_HUD_IDLE_MIN`,
   `RETRO_HUD_SLEEP_MIN`, `RETRO_HUD_CACHE_DIR`.

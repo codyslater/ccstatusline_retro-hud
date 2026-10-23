@@ -131,7 +131,9 @@ removes them again.
    ```
 
    `ts` is epoch seconds and `ttl` is how long to show it (default 30s).
-   The newest unexpired line wins. The HUD only reads this file and never
+   The newest unexpired line wins. The text `wave` is a gesture, not
+   words: the sprite waves in place for the `ttl` instead (a red- or
+   amber-zone gauge still wins). The HUD only reads this file and never
    writes it.
 2. **State changes**, once per transition, for 30s: `ready` (your turn),
    `need you`, `hm.` (error burst), `compact?` (context crosses 90%),
@@ -153,6 +155,19 @@ Files untouched for 7 days are pruned.
 states, for bubbles to expire, and for the sprite to move between
 messages. The installer sets it to 5.
 
+**Click the alien.** With [click actions](#click-actions) on, the sprite
+(not its bubble) is a link to a small menu: **wave** (appends a 10s
+`wave` event, so it waves back), **quiet 1h** (sets `mute_until` an hour
+ahead: no bubbles until then), **sprite ▸** (alien / cat / robot / ghost
+writes `sprite` to the state file; *default* removes it and the env
+choice applies again) and **status** (state, how long, context %, worst
+limit %, cost, from the state file's snapshot, as a tmux message). To
+find the session behind a pane, the HUD also writes
+`~/.cache/retro-hud/pane-<N>.sid` (the session id shown in tmux pane
+`%N`) while click actions are on; the handler reads it, never the link.
+If you moved the cache with `RETRO_HUD_CACHE_DIR`, set it for the handler
+too (see below).
+
 `RETRO_HUD_PRESENCE=0` brings back the gauge-only alien, with no
 transcript reads and no files. `RETRO_HUD_ALIEN=0` grounds the alien
 entirely.
@@ -172,6 +187,7 @@ a slash command.
 | `$` cost | types `/cost` |
 | `+N/-M` lines | read-only popup: `git diff --stat`, then the diff in `less` |
 | rate-limit gauges | opens your usage page (`RETRO_HUD_USAGE_URL`) in the browser |
+| the alien | wave · quiet 1h · sprite ▸ · status (see [Agent presence](#agent-presence)) |
 
 The branch badge and PR number keep their GitHub links.
 
@@ -202,7 +218,9 @@ it never sees your shell's exports. It reads `RETRO_HUD_MODELS` (default
 `opus,sonnet,haiku`) and `RETRO_HUD_USAGE_URL` (default
 `https://claude.ai/settings/usage`) from its environment first, then from
 `~/.config/retro-hud/env`: plain `KEY=VALUE` lines, parsed one by one
-(never sourced; other keys are ignored). The installer creates that file
+(never sourced; other keys are ignored). The agent menu also reads
+`RETRO_HUD_AGENT_NAME` (its title) and `RETRO_HUD_CACHE_DIR` (only if
+you moved the HUD's cache) from there. The installer creates that file
 with commented defaults.
 
 **Caveats.** A command is appended to whatever is in the composer — if you
@@ -216,7 +234,7 @@ retro-hud://<action>?pane=<tmux pane id>[&sock=<tmux socket path>]
 ```
 
 `<action>` is `model`, `effort`, `ctx`, `cost`, `diff`, `usage`, or
-`agent` (reserved). Values are percent-encoded (`pane=%2512` is pane
+`agent`. Values are percent-encoded (`pane=%2512` is pane
 `%12`). `sock` is the server socket from `$TMUX`, so non-default servers
 (`tmux -L`) are addressed correctly. The `effort` link also carries
 `cur=<level>` so the menu can mark the current level. `usage` links have

@@ -51,7 +51,9 @@ permission prompt, flinches at a burst of tool errors, then dozes and
 sleeps; a red- or amber-zone gauge still takes precedence. Short bubbles
 on the rule come from the events channel
 (<cache>/<session_id>.events.jsonl, one {"ts", "text", "ttl"} per line),
-from state changes, and from rare idle quips.
+from state changes, and from rare idle quips; an event whose text is
+"wave" makes the sprite wave instead. With RETRO_HUD_ACTIONS=1 in tmux
+the sprite links to retro-hud://agent (wave, quiet, sprite, status).
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
