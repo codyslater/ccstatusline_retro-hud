@@ -909,8 +909,9 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
             mood_since = rec["mood_since"]
             _map_pane(d, sid)
     if wave_since is not None and mood not in ("red", "error", "agitated"):
-        # waves in place for the event's ttl; the gesture is not stored
-        mood, since, mood_since = "yours", wave_since, wave_since
+        # waves in place for the event's ttl; the gesture is not stored,
+        # and it is not a mood change either: arms up at once, no scatter
+        mood, since, mood_since = "yours", wave_since, wave_since - SCATTER_S
     return {"mood": mood, "bubble": bubble, "since": since, "sprite": sprite,
             "mood_since": mood_since, "seed": seed, "icon": icon}
 

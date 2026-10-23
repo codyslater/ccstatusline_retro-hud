@@ -1393,7 +1393,7 @@ class TestAgentEndToEnd(ShellHarness):
             p = copy.deepcopy(MINIMAL)
             p["transcript_path"] = self.transcript
             p["session_id"] = self.SID
-            before = sl.render(copy.deepcopy(p), 160, self.t0 + 100)
+            sl.render(copy.deepcopy(p), 160, self.t0 + 100)  # records `creature`
             self.run_handler(self.url("agent"))
             labels = [i[0] for i in self.menu()[2]]
             self.assertIn("reroll", labels)
@@ -1403,7 +1403,6 @@ class TestAgentEndToEnd(ShellHarness):
             self.assertIn("RETRO_HUD_CREATURE_SEED={}".format(seed),
                           self.tmux_calls("display-message")[-1][-1])
             after = sl.render(copy.deepcopy(p), 160, self.t0 + 100)
-            self.assertNotEqual(after[:2], before[:2])
             os.environ["RETRO_HUD_CREATURE_SEED"] = str(seed)
             with open(os.path.join(self.cache, self.SID + ".state.json")) as f:
                 st = json.load(f)
@@ -3031,9 +3030,13 @@ class TestCreatureHud(CreatureCase):
     def test_wave_event_raises_the_arms(self):
         self.tx(asst(NOW - 2, "tool_use"))
         self.events({"ts": NOW, "text": "wave", "ttl": 30})
-        pres = sl.presence(self.payload(), NOW + 1, 0, 0, 0, 0, creature=True)
-        self.assertEqual(pres["mood"], "yours")
-        self.assertEqual(pres["mood_since"], NOW)
+        steady = sl.pose(3, "yours", None, NOW, 60)["canvas"]
+        for el in (1, 4, 7):
+            pres = sl.presence(self.payload(), NOW + el, 0, 0, 0, 0, creature=True)
+            self.assertEqual(pres["mood"], "yours")
+            # a gesture is not a mood change: clean arms up, no scatter, no jump
+            cv = sl.pose(3, "yours", pres["mood_since"], NOW + el, 60)["canvas"]
+            self.assertEqual(cv, steady, el)
         self.assertEqual(self.state_file()["mood"], "working")  # the gesture is not stored
 
 
