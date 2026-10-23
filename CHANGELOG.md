@@ -4,7 +4,7 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
-## Unreleased
+## [v2.8.0] — 2026-10-22
 
 ### Added
 - **Click actions** (`RETRO_HUD_ACTIONS=1`, off by default). Inside tmux
