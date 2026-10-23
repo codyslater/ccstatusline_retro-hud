@@ -134,6 +134,10 @@ menu_cmd() {
 show_menu() {  # title, then name/key/command triples
     local title=$1
     shift
+    if ! safe_path "$SELF"; then  # menu items embed it between single quotes
+        log "menu refused: unsafe handler path $(printf '%q' "$SELF"); install it under a plain path"
+        exit 0
+    fi
     need_client
     tm display-menu -c "$CLIENT" -x C -y C -T "$title" "$@" || log "display-menu failed"
 }

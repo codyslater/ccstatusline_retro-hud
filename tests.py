@@ -922,6 +922,20 @@ class TestHandlerActions(ShellHarness):
         finally:
             s.close()
 
+    def test_unsafe_install_path_shows_no_menu(self):
+        # Menu items embed the handler's own path in a tmux command; a path
+        # with quotes or $ could break out of it, so no menu is shown.
+        odd = os.path.join(self.tmp, "it's $x")
+        os.makedirs(odd)
+        copy_path = os.path.join(odd, "retro-hud-handler.sh")
+        shutil.copy(HANDLER, copy_path)
+        p = subprocess.run(["bash", copy_path, self.url("model")],
+                           env=self.env({"FAKE_TMUX_PANE_PATH": self.work}),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.tmux_calls("display-menu"), [])
+        self.assertIn("unsafe", self.handler_log())
+
     def test_no_tmux_server_is_logged_not_fatal(self):
         p = self.run_handler(self.url("model"), FAKE_TMUX_NOSERVER="1")
         self.assertEqual(p.returncode, 0, p.stderr.decode())
