@@ -7,7 +7,14 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | Env var | Default | Effect |
 |---------|---------|--------|
 | `RETRO_HUD_FRAME` | `1` | `0` disables the right-edge frame fill |
-| `RETRO_HUD_ALIEN` | `1` | `0` grounds the alien |
+| `RETRO_HUD_ALIEN` | `1` | `0` grounds the alien (and with it all agent presence: no transcript reads, no files) |
+| `RETRO_HUD_PRESENCE` | `1` | `0` restores the gauge-only alien: it reacts to the gauges but not to what the agent is doing |
+| `RETRO_HUD_SPRITE` | `alien` | presence sprite set: `alien`, `cat`, `robot`, `ghost` |
+| `RETRO_HUD_AGENT_NAME` | — | name the agent that lives in this terminal; prefixes state bubbles (`Nova: ready`) |
+| `RETRO_HUD_QUIPS` | `1` | `0` turns off the rare idle quips |
+| `RETRO_HUD_IDLE_MIN` | `10` | minutes of "your turn" before the alien goes idle |
+| `RETRO_HUD_SLEEP_MIN` | `60` | minutes of "your turn" before it falls asleep |
+| `RETRO_HUD_CACHE_DIR` | `~/.cache/retro-hud` | where the per-session state, events and hook files live (falls back to `/tmp/retro-hud-<uid>` without a usable home). `presence-hook.sh` honours it too |
 | `RETRO_HUD_RL_MODE` | `cycle` | rate-limit labels *below* the pin threshold: `cycle` (alternate % ↔ time-to-reset every 30s, every 10s in the red zone), `pct`, `time`, or `both` |
 | `RETRO_HUD_COUNTDOWN_PCT` | `70` | usage % where the label stops rotating and pins the combined `81% · 3d`; defaults to the amber zone |
 | `RETRO_HUD_CTX_TOKENS` | `auto` | context token readout: `auto` (amber zone up), `always`, `never` |
@@ -66,10 +73,34 @@ to `~/.claude/settings.json`:
 }
 ```
 
-`refreshInterval` is optional but recommended: it re-renders every 5 seconds
-while idle so rate-limit countdowns tick, the alien patrols, and the frame
-re-fits within seconds of a terminal resize (Claude Code doesn't re-run the
-statusline on resize, so the interval is what picks up the new width).
+`refreshInterval` re-renders every 5 seconds while idle so rate-limit
+countdowns tick, the alien patrols, and the frame re-fits within seconds of
+a terminal resize (Claude Code doesn't re-run the statusline on resize, so
+the interval is what picks up the new width). Agent presence **requires**
+it: without it the idle and asleep states never show and bubbles don't
+expire until the next message.
+
+### Presence hooks (manual)
+
+`bash install.sh --hooks` does this for you. To do it by hand, copy
+`presence-hook.sh` to `~/.claude/` and add:
+
+```json
+{
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "bash ~/.claude/presence-hook.sh yours"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "bash ~/.claude/presence-hook.sh working"}]}],
+    "Notification": [
+      {"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "bash ~/.claude/presence-hook.sh needs"}]},
+      {"matcher": "idle_prompt", "hooks": [{"type": "command", "command": "bash ~/.claude/presence-hook.sh yours idle_prompt"}]}
+    ]
+  }
+}
+```
+
+Each run appends `{"ts": <epoch>, "state": "..."}` to
+`~/.cache/retro-hud/<session_id>.hooks.jsonl`. The script prints nothing
+and always exits 0, so it can never block a turn.
 
 ## Troubleshooting width issues (resize, WSL2, VS Code)
 

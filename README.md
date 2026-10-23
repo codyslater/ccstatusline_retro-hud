@@ -21,6 +21,7 @@ instead of crashing.
 git clone https://github.com/codyslater/ccstatusline_retro-hud.git
 cd ccstatusline_retro-hud
 bash install.sh     # backs up settings.json before touching it
+# or: bash install.sh --hooks   (also lets the alien see permission prompts)
 ```
 
 Restart Claude Code. Preview any time without it:
@@ -75,19 +76,86 @@ narrows, after the cache readout, token counts, diff stat, agent name, and
 session duration. Each gauge escalates independently, so a calm limit keeps
 cycling beside a warning one.
 
-### The resident alien
+### Agent presence
 
-A text-art alien patrols the top frame rule, blinking as it ping-pongs.
-It reacts to your **worst** gauge (context or either rate limit):
+A text-art alien lives on the top frame rule and acts as the visible
+presence of the agent running in that session: it hustles while the agent
+works, waves when the turn is yours, beckons when a permission prompt is
+waiting, and dozes off when nothing happens. Now and then it says
+something short on the rule. Most of the time it says nothing.
 
-| Mood | Sprite | Trigger | Speed |
+**What it reacts to**, highest priority first:
+
+| Mood | Sprite | Trigger | Moves |
 |------|--------|---------|-------|
-| $\color{#00ff00}{\textsf{calm}}$ | `/o.o\` | all gauges < 70% | 1× |
-| $\color{#ff8700}{\textsf{agitated}}$ | `>o.o<` | any gauge ≥ 70% | 2× |
 | $\color{#ff0000}{\textsf{red alert}}$ | `\o.o/` | any gauge ≥ 90% | 4× |
+| $\color{#ff0087}{\textsf{error}}$ | `/>.<\` | ≥ 2 failed tool calls within 60s (held 30s) | 2× |
+| $\color{#ff8700}{\textsf{agitated}}$ | `>o.o<` | any gauge ≥ 70% | 2× |
+| $\color{#ffff00}{\textsf{needs you}}$ | `/o.o?` | a permission prompt is open (needs `--hooks`) | parked |
+| $\color{#00ffff}{\textsf{working}}$ | `/o.o/` | the agent is on it | 3× |
+| $\color{#00ff00}{\textsf{your turn}}$ | `\^.^/` | the agent finished its turn | waves 30s, then 1× |
+| idle | `/-_-\` | your turn for 10 min | parked, `z` |
+| asleep | `/_._\` | your turn for 60 min | parked, `zZ` |
+| $\color{#00ff00}{\textsf{calm}}$ | `/o.o\` | nothing known (no transcript yet) | 1× |
 
-Peripheral vision tells you something's hot before you read a number.
-Ground it with `RETRO_HUD_ALIEN=0`.
+The gauges still come first, so peripheral vision tells you something's
+hot before you read a number. The agent's state is read from the last
+64 KB of the session transcript: entry type, stop reason, error flag and
+timestamp only, never message text. A missing or unreadable transcript
+falls back to the gauge-only alien. Pick another sprite set with
+`RETRO_HUD_SPRITE=cat|robot|ghost`.
+
+**Hooks (recommended).** The transcript can't tell a pending permission
+prompt from a running tool, since both end in an unanswered tool call, so
+a prompt reads as "working". Install the hooks for the accurate version:
+
+```bash
+bash install.sh --hooks   # backs up settings.json; safe to re-run
+```
+
+This copies `presence-hook.sh` to `~/.claude/` and registers it for
+`Stop`, `UserPromptSubmit` and the `permission_prompt` / `idle_prompt`
+notifications. It is plain bash, prints nothing and always exits 0. When a
+hook's report is newer than the transcript, the hook wins. `uninstall.sh`
+removes them again.
+
+**Bubbles** (up to 18 characters on the rule beside the sprite,
+`/o.o/╴ready`), from three sources in priority order:
+
+1. **The events channel.** Any local tool can make the agent "say"
+   something by appending one JSON line to
+   `~/.cache/retro-hud/<session_id>.events.jsonl`:
+
+   ```json
+   {"ts": 1767225600, "text": "deploy finished", "ttl": 30}
+   ```
+
+   `ts` is epoch seconds and `ttl` is how long to show it (default 30s).
+   The newest unexpired line wins. The HUD only reads this file and never
+   writes it.
+2. **State changes**, once per transition, for 30s: `ready` (your turn),
+   `need you`, `hm.` (error burst), `compact?` (context crosses 90%),
+   `limit soon` (a rate limit crosses 70%). Set
+   `RETRO_HUD_AGENT_NAME=Nova` to name the agent that lives in this
+   terminal: `Nova: ready`.
+3. **Idle quips**: rare (at most one per 20 min while idle), from a small
+   built-in pool. `RETRO_HUD_QUIPS=0` turns them off.
+
+To remember transitions, the HUD keeps a small state file per session at
+`~/.cache/retro-hud/<session_id>.state.json`. It holds the last state and
+bubble, plus a snapshot of state, since, context %, worst limit % and
+cost. Other tools may set `"mute_until": <epoch>` in it to silence every
+bubble until then, or `"sprite"` to switch the sprite set. The file is
+written atomically. If it can't be written, you just get no bubbles.
+Files untouched for 7 days are pruned.
+
+**`statusLine.refreshInterval` is required** for the idle and asleep
+states, for bubbles to expire, and for the sprite to move between
+messages. The installer sets it to 5.
+
+`RETRO_HUD_PRESENCE=0` brings back the gauge-only alien, with no
+transcript reads and no files. `RETRO_HUD_ALIEN=0` grounds the alien
+entirely.
 
 ## Click actions
 

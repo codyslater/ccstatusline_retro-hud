@@ -34,6 +34,24 @@ Env toggles:
                                  tmux only); the rate-limit gauges link to
                                  retro-hud://usage everywhere. Needs a
                                  handler for the scheme (install.sh --handler)
+    RETRO_HUD_PRESENCE=0         gauge-only alien: ignore what the agent does
+    RETRO_HUD_SPRITE=alien       presence sprite set: alien, cat, robot, ghost
+    RETRO_HUD_AGENT_NAME=<name>  prefix state bubbles ("Nova: ready")
+    RETRO_HUD_QUIPS=0            no idle quips
+    RETRO_HUD_IDLE_MIN=10        minutes of "your turn" before idle
+    RETRO_HUD_SLEEP_MIN=60       minutes of "your turn" before asleep
+    RETRO_HUD_CACHE_DIR=<dir>    presence files (default ~/.cache/retro-hud)
+
+Agent presence: the alien on the top rule follows the session's agent,
+read from a bounded tail of the transcript (entry type, stop reason,
+error flag and timestamp only; never message text) and, when
+`install.sh --hooks` was run, from presence-hook.sh's log. It hustles
+while the agent works, waves when the turn is yours, beckons at a
+permission prompt, flinches at a burst of tool errors, then dozes and
+sleeps; a red- or amber-zone gauge still takes precedence. Short bubbles
+on the rule come from the events channel
+(<cache>/<session_id>.events.jsonl, one {"ts", "text", "ttl"} per line),
+from state changes, and from rare idle quips.
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
@@ -43,8 +61,9 @@ the % is always the token touching its own bar. Each gauge escalates on
 its own, and the pinned label is the last thing row 2 gives up when the
 terminal narrows, so neither number flickers away under you.
 """
-__version__ = "2.8.0"
+__version__ = "2.9.0"
 
+import calendar
 import json
 import os
 import re
@@ -105,6 +124,52 @@ ALIEN_FRAMES = (("/o.o\\", "/-.-\\"),
                 (">o.o<", ">-.-<"),
                 ("\\o.o/", "\\O.O/"))
 ALIEN_SPEEDS = (1, 2, 4)  # rule-cells per 30s tick
+
+# Agent presence: one sprite per mood, two frames each, all width 5. The
+# gauge moods (calm / agitated / red) of the alien are ALIEN_FRAMES; the
+# rest follow what the session's agent is doing. Every mood's first frame
+# is unique within its set, so a glance tells them apart.
+SPRITES = {
+    "alien": {
+        "calm": ALIEN_FRAMES[0], "agitated": ALIEN_FRAMES[1], "red": ALIEN_FRAMES[2],
+        "error": ("/>.<\\", "\\>.</"),     # flinches
+        "working": ("/o.o/", "\\o.o\\"),   # hustles
+        "yours": ("\\^.^/", "/^.^\\"),     # waves: your turn
+        "needs": ("/o.o?", "\\o.o?"),      # beckons: a prompt is waiting
+        "idle": ("/-_-\\", "/-_-\\"),      # dozes
+        "asleep": ("/_._\\", "/_._\\"),
+    },
+    "cat": {
+        "calm": ("=^.^=", "=-.-="), "agitated": (">^.^<", ">-.-<"),
+        "red": ("\\^O^/", "/^O^\\"), "error": ("=>.<=", "=x.x="),
+        "working": ("=^.^/", "\\^.^="), "yours": ("\\^w^/", "=^w^="),
+        "needs": ("=^.^?", "=^o^?"), "idle": ("=-_-=", "=-_-="),
+        "asleep": ("=_._=", "=_._="),
+    },
+    "robot": {
+        "calm": ("[o_o]", "[-_-]"), "agitated": ("{o_o}", "{-_-}"),
+        "red": ("\\[O]/", "/[O]\\"), "error": ("[x_x]", "[X_X]"),
+        "working": ("[o_o>", "<o_o]"), "yours": ("[^_^]", "[^_^/"),
+        "needs": ("[o_o?", "[?_?]"), "idle": ("[=_=]", "[=_=]"),
+        "asleep": ("[_._]", "[_._]"),
+    },
+    "ghost": {
+        "calm": ("(o.o)", "(-.-)"), "agitated": ("(O.O)", "(o.O)"),
+        "red": ("\\(O)/", "/(O)\\"), "error": ("(x.x)", "(>.<)"),
+        "working": ("(o.o~", "~o.o)"), "yours": ("(^.^)", "(^.^/"),
+        "needs": ("(o.o?", "(?.?)"), "idle": ("(-_-)", "(-_-)"),
+        "asleep": ("(_._)", "(_._)"),
+    },
+}
+# rule-cells per 10s tick; 0 parks the sprite where it was when the mood began
+MOOD_SPEEDS = {"calm": 1, "agitated": 2, "red": 4, "error": 2, "working": 3,
+               "yours": 1, "needs": 0, "idle": 0, "asleep": 0}
+WAVE_S = 30  # "yours" waves in place this long before cruising again
+MOOD_COLORS = {"calm": NEON_GREEN, "agitated": NEON_ORG, "red": NEON_RED,
+               "error": NEON_PINK, "working": NEON_CYAN, "yours": NEON_GREEN,
+               "needs": NEON_YEL, "idle": "\033[38;5;65m", "asleep": DIM}
+BUBBLE = "\033[38;5;245m"  # dim speech-bubble text on the rule
+BUBBLE_MAX = 18            # visible chars of bubble text
 
 # How many cells the terminal advances for emoji (EAW Wide/Fullwidth).
 # Correct terminals use 2; some WSL/VS Code setups advance only 1 —
@@ -399,18 +464,433 @@ def num(v, default=0):
         return default
 
 
+# ── agent presence: what the session's agent is doing ──
+# Only entry type, stop reason, error flag and timestamp are read — never
+# message text, beyond a 40-char prefix test for harness markers.
+TAIL_BYTES = 64 * 1024    # transcript tail read on every refresh
+TAIL_MAX = 1024 * 1024    # widened read when one huge line hides every message
+IDLE_S = 10 * 60          # "yours" this long → idle
+SLEEP_S = 60 * 60         # "yours" this long → asleep
+ERROR_WINDOW_S = 60       # ≥ 2 failed tool results within this window …
+ERROR_HOLD_S = 30         # … hold the error state this long after the newest
+_HARNESS_MARKERS = ("<command-name>", "<local-command-stdout>",
+                    "<local-command-caveat>")
+_TURN_ENDS = ("end_turn", "stop_sequence", "max_tokens", "refusal")
+
+
+def parse_ts(s):
+    """Transcript ISO-8601 UTC timestamp → epoch seconds, or None."""
+    if not isinstance(s, str) or len(s) < 19:
+        return None
+    try:
+        t = calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+    m = re.match(r"\.(\d+)", s[19:])
+    return t + float("0." + m.group(1)) if m else t
+
+
+def tail_entries(path, limit=TAIL_BYTES):
+    """Parse the JSONL entries in the last `limit` bytes of a transcript.
+
+    Returns (entries oldest→newest, bytes read). The cut first line is
+    dropped. If no message entry survives (one huge line can fill the
+    window) the read widens once, up to TAIL_MAX.
+    """
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            while True:
+                start = max(size - limit, 0)
+                f.seek(start)
+                buf = f.read(limit)
+                lines = buf.split(b"\n")
+                if start > 0:
+                    lines = lines[1:]
+                entries = []
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        e = json.loads(line.decode("utf-8", "replace"))
+                    except ValueError:
+                        continue
+                    if isinstance(e, dict):
+                        entries.append(e)
+                if start == 0 or limit >= TAIL_MAX or any(
+                        e.get("type") in ("user", "assistant") for e in entries):
+                    return entries, len(buf)
+                limit = TAIL_MAX
+    except (OSError, TypeError, ValueError):
+        return [], 0
+
+
+def _classify(e):
+    """(activity, ts, is_error) for a message entry, or None to skip it."""
+    kind = e.get("type")
+    if kind not in ("user", "assistant") or e.get("isMeta"):
+        return None
+    ts = parse_ts(e.get("timestamp"))
+    msg = e.get("message")
+    if ts is None or not isinstance(msg, dict):
+        return None
+    if kind == "assistant":
+        return ("yours" if msg.get("stop_reason") in _TURN_ENDS else "working"), ts, False
+    content = msg.get("content")
+    if isinstance(content, str):
+        first = content
+    elif isinstance(content, list) and content and isinstance(content[0], dict):
+        first = content[0].get("text") if content[0].get("type") == "text" else ""
+    else:
+        return None
+    head = (first or "")[:40] if isinstance(first, str) else ""
+    if head.startswith(_HARNESS_MARKERS):
+        return None
+    if head.startswith("[Request interrupted"):
+        return "yours", ts, False
+    err = isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error") is True
+        for b in content)
+    return "working", ts, err
+
+
+def _decay(state, since, now, idle_s, sleep_s):
+    if state == "yours" and now - since >= sleep_s:
+        return "asleep"
+    if state == "yours" and now - since >= idle_s:
+        return "idle"
+    return state
+
+
+def agent_state(entries, now, idle_s=IDLE_S, sleep_s=SLEEP_S):
+    """(state, since) from transcript entries (oldest→newest).
+
+    state: error | working | yours | idle | asleep | unknown. `since` is
+    the newest message entry's timestamp (the newest error's for `error`).
+    """
+    newest, errors = None, []
+    for e in entries:
+        c = _classify(e) if isinstance(e, dict) else None
+        if c is None:
+            continue
+        newest = c
+        if c[2]:
+            errors.append(c[1])
+    if newest is None:
+        return "unknown", 0
+    if errors:
+        last = max(errors)
+        burst = sum(1 for t in errors if t >= last - ERROR_WINDOW_S)
+        if burst >= 2 and now - last < ERROR_HOLD_S:
+            return "error", last
+    state, since = newest[0], newest[1]
+    return _decay(state, since, now, idle_s, sleep_s), since
+
+
+# ── presence: hooks layer, state file, bubbles ──
+HOOK_STATES = ("working", "yours", "needs")
+STATE_BUBBLE_S = 30        # state-change bubbles show this long
+EVENT_TTL_S = 30           # default lifetime of an events-channel bubble
+QUIP_EVERY_S = 20 * 60     # at most one idle quip per this many seconds
+PRUNE_AGE_S = 7 * 86400    # cache files untouched this long are removed
+PRUNE_EVERY_S = 3600
+_CACHE_SUFFIXES = (".state.json", ".events.jsonl", ".hooks.jsonl")
+_SID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+QUIPS = ("all quiet.", "systems nominal", "standing by", "scanning sector 7",
+         "orbit stable", "insert coin", "beep boop", "0 bogeys on scope",
+         "buffer empty", "ping?", "hello, operator", "stars look nice",
+         "*hums quietly*", "charging lasers", "awaiting orders")
+
+
+def _tail_lines(path, limit):
+    """Parsed JSON objects from the last `limit` bytes of a JSONL file."""
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            start = max(size - limit, 0)
+            f.seek(start)
+            lines = f.read(limit).split(b"\n")
+    except (OSError, TypeError, ValueError):
+        return []
+    out = []
+    for line in lines[1:] if start else lines:
+        try:
+            e = json.loads(line.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        if isinstance(e, dict):
+            out.append(e)
+    return out
+
+
+def _num_or_none(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def read_hooks(path):
+    """[(ts, state, src)] from the hook log, oldest→newest."""
+    out = []
+    for e in _tail_lines(path, 4096):
+        ts = _num_or_none(e.get("ts"))
+        if ts is not None and e.get("state") in HOOK_STATES:
+            src = e.get("src")
+            out.append((ts, e["state"], src if isinstance(src, str) else ""))
+    return out
+
+
+def merge_hooks(state, since, hooks, now, idle_s=IDLE_S, sleep_s=SLEEP_S):
+    """Let hook-reported state that is newer than the transcript win.
+
+    Hooks see what the transcript cannot (a pending permission prompt).
+    An idle_prompt notification never papers over a pending `needs`; a
+    run of the same state keeps its first timestamp so idle/asleep decay
+    counts from when the turn really ended. An error burst always stands.
+    """
+    if state == "error" or not hooks:
+        return state, since
+    i = len(hooks) - 1
+    if hooks[i][2] == "idle_prompt":
+        j = i - 1
+        while j >= 0 and hooks[j][2] == "idle_prompt":
+            j -= 1
+        if j >= 0 and hooks[j][1] == "needs" and hooks[j][0] >= since - 1:
+            i = j
+    ts, hstate, _ = hooks[i]
+    if state != "unknown" and ts < since - 1:  # 1 s slack for whole-second hook clocks
+        return state, since
+    while i > 0 and hooks[i - 1][1] == hstate:
+        i -= 1
+    hsince = hooks[i][0]
+    return _decay(hstate, hsince, now, idle_s, sleep_s), hsince
+
+
+def cache_dir(create=True):
+    """Per-user presence cache dir, or "" if unusable.
+
+    RETRO_HUD_CACHE_DIR, else ~/.cache/retro-hud, else (no HOME, or it
+    can't be created) /tmp/retro-hud-<uid>. With create=False nothing is
+    made: an existing directory is returned or "".
+    """
+    d = os.environ.get("RETRO_HUD_CACHE_DIR", "")
+    home = os.environ.get("HOME", "")
+    cands = [d] if d else ([os.path.join(home, ".cache", "retro-hud")] if home else [])
+    if not d and hasattr(os, "getuid"):
+        cands.append("/tmp/retro-hud-{}".format(os.getuid()))
+    for c in cands:
+        try:
+            if create:
+                os.makedirs(c, 0o700, exist_ok=True)
+            elif not os.path.isdir(c):
+                continue
+            if c.startswith("/tmp/") and os.stat(c).st_uid != os.getuid():
+                continue  # someone else's directory: never use it
+            return c
+        except OSError:
+            continue
+    return ""
+
+
+def _read_json(path):
+    try:
+        with open(path) as f:
+            obj = json.loads(f.read(65536))
+        return obj if isinstance(obj, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _clean(text):
+    return "".join(ch for ch in str(text) if ch.isprintable()).strip()
+
+
+def newest_event(events, now):
+    """Text of the newest unexpired events-channel entry, or ""."""
+    for e in reversed(events):
+        ts = _num_or_none(e.get("ts"))
+        ttl = _num_or_none(e.get("ttl"))
+        text = e.get("text")
+        if ts is None or not isinstance(text, str):
+            continue
+        ttl = EVENT_TTL_S if ttl is None else ttl
+        if ts - 5 <= now < ts + ttl and _clean(text):
+            return _clean(text)
+    return ""
+
+
+def next_bubble(prev, snap, now, event="", name="", quips=True):
+    """(bubble text, state-file updates) for this refresh.
+
+    Priority: the events channel → a state-change bubble (once per
+    transition, STATE_BUBBLE_S) → a rare idle quip → an ambient z / zZ
+    while dozing. Muted (mute_until in the future) → nothing at all.
+    """
+    upd = {}
+    state = snap["state"]
+    pstate = prev.get("state")
+    said = None
+    if pstate is not None:  # the first sighting is not a transition
+        if state != pstate and state == "error":
+            said = "hm."
+        elif state != pstate and state == "needs":
+            said = "need you"
+        elif (_num_or_none(prev.get("ctx_pct")) or 0) < RED_PCT <= snap["ctx_pct"]:
+            said = "compact?"
+        elif (_num_or_none(prev.get("limit_pct")) or 0) < WARN_PCT <= snap["limit_pct"]:
+            said = "limit soon"
+        elif state != pstate and state == "yours":
+            said = "ready"
+    bubble = prev.get("bubble") if isinstance(prev.get("bubble"), dict) else None
+    if said:
+        bubble = {"text": (name + ": " if name else "") + said,
+                  "until": now + STATE_BUBBLE_S}
+    if bubble and not (_num_or_none(bubble.get("until")) or 0) > now:
+        bubble = None
+    last_quip = _num_or_none(prev.get("last_quip")) or 0
+    if bubble is None and not event and quips and state == "idle" \
+            and now - last_quip >= QUIP_EVERY_S:
+        bubble = {"text": QUIPS[int(now // QUIP_EVERY_S) % len(QUIPS)],
+                  "until": now + STATE_BUBBLE_S}
+        upd["last_quip"] = now
+    upd["bubble"] = bubble
+    if (_num_or_none(prev.get("mute_until")) or 0) > now:
+        return "", upd
+    text = event or (bubble or {}).get("text") or \
+        {"idle": "z", "asleep": "zZ"}.get(state, "")
+    return trunc(_clean(text), BUBBLE_MAX), upd
+
+
+def _prune(d, now, keep):
+    try:
+        for n in os.listdir(d):
+            if n.endswith(_CACHE_SUFFIXES) and not n.startswith(keep):
+                p = os.path.join(d, n)
+                try:
+                    if os.path.getmtime(p) < now - PRUNE_AGE_S:
+                        os.remove(p)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def _write_json(path, obj):
+    tmp = "{}.{}.tmp".format(path, os.getpid())
+    try:
+        with open(tmp, "w") as f:
+            json.dump(obj, f)
+        os.replace(tmp, path)
+        return True
+    except (OSError, TypeError, ValueError):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost):
+    """Agent presence for this refresh: {"mood", "bubble", "since",
+    "sprite"}, or None for the plain gauge alien (presence off, or the
+    agent's state is unknown). Never raises; any IO failure degrades to
+    no bubble."""
+    if os.environ.get("RETRO_HUD_PRESENCE", "1") == "0":
+        return None
+    idle_s = (num(os.environ.get("RETRO_HUD_IDLE_MIN")) or IDLE_S // 60) * 60
+    sleep_s = (num(os.environ.get("RETRO_HUD_SLEEP_MIN")) or SLEEP_S // 60) * 60
+    path = data.get("transcript_path")
+    entries = tail_entries(path)[0] if isinstance(path, str) and path else []
+    state, since = agent_state(entries, now, idle_s, sleep_s)
+    sid = data.get("session_id")
+    sid = sid if isinstance(sid, str) and _SID_RE.fullmatch(sid) else ""
+    if sid:  # the hooks layer, if installed, knows what the transcript can't
+        d = cache_dir(create=False)
+        if d:
+            state, since = merge_hooks(state, since,
+                                       read_hooks(os.path.join(d, sid + ".hooks.jsonl")),
+                                       now, idle_s, sleep_s)
+    if state == "unknown":
+        return None
+    sprite = os.environ.get("RETRO_HUD_SPRITE", "alien")
+    bubble = ""
+    d = cache_dir() if sid else ""
+    if d:
+        sp = os.path.join(d, sid + ".state.json")
+        prev = _read_json(sp)
+        if prev.get("sprite") in SPRITES:
+            sprite = prev["sprite"]
+        snap = {"state": state, "since": since, "ctx_pct": ctx_pct,
+                "limit_pct": limit_pct, "cost": cost}
+        event = newest_event(_tail_lines(os.path.join(d, sid + ".events.jsonl"), 16384), now)
+        name = _clean(os.environ.get("RETRO_HUD_AGENT_NAME", ""))
+        quips = os.environ.get("RETRO_HUD_QUIPS", "1") != "0"
+        text, upd = next_bubble(prev, snap, now, event, name, quips)
+        rec = dict(prev)
+        rec.update(snap)
+        rec.update(upd)
+        rec["updated"] = now
+        if now - (_num_or_none(prev.get("last_prune")) or 0) >= PRUNE_EVERY_S:
+            _prune(d, now, sid + ".")
+            rec["last_prune"] = now
+        if _write_json(sp, rec):
+            bubble = text
+    return {"mood": pick_mood(gauge_pct, state), "bubble": bubble,
+            "since": since, "sprite": sprite}
+
+
 # ── row assembly ──
 def _join(prefix, segs):
     return prefix + SEP.join(s for s in segs if s)
 
 
-def _frame(row, cols, corner, frame_on, alien_pct=None, now=0):
+def pick_mood(gauge_pct, state):
+    """Mood for this refresh: red-zone gauge → error → agitated gauge →
+    what the agent is doing → calm."""
+    if gauge_pct >= RED_PCT:
+        return "red"
+    if state == "error":
+        return "error"
+    if gauge_pct >= WARN_PCT:
+        return "agitated"
+    if state in ("needs", "working", "yours", "idle", "asleep"):
+        return state
+    return "calm"
+
+
+def _place_bubble(pos, span, text, moving_right):
+    """(side, text) for a bubble beside a sprite at `pos` on a `span` rule:
+    side is 1 (after the sprite), -1 (before it) or 0 (no room)."""
+    room = {1: span - pos, -1: pos}  # rule cells free on each side
+    need = 1 + vwidth(text)          # the ╴ glyph + text
+    for side in ((1, -1) if moving_right else (-1, 1)):
+        if room[side] >= need:
+            return side, text
+    side = 1 if room[1] >= room[-1] else -1
+    if room[side] < 3:  # glyph + 2 chars, or nothing
+        return 0, ""
+    fit = room[side] - 1
+    if fit >= 6:
+        return side, trunc(text, fit)
+    out = ""  # too tight for a ".." suffix: a clean cut reads better
+    for ch in text:
+        if vwidth(out + ch) > fit:
+            break
+        out += ch
+    return (side, out) if out else (0, "")
+
+
+def _frame(row, cols, corner, frame_on, alien_pct=None, now=0, pres=None):
     """Pad with a dim rule and close the frame at the right edge.
 
     When alien_pct is given (and the rule is long enough), a text-art
-    alien patrols the rule: it ping-pongs along it, blinking each 30s
+    alien patrols the rule: it ping-pongs along it, blinking each 10s
     tick, walks faster as the worst gauge climbs, and its face and
     color escalate green → amber → red with that gauge's zone.
+
+    `pres` (agent presence) overrides the gauge-only behaviour with
+    {"mood", "bubble", "since", "sprite"}: the mood picks frames, color
+    and speed from SPRITES / MOOD_SPEEDS / MOOD_COLORS, and a bubble is
+    drawn on the rule beside the sprite, in its travel direction. The
+    bubble takes rule cells, never adds any: the frame math is unchanged.
     """
     gap = cols - vislen(row)
     if not frame_on or gap < 2:
@@ -418,15 +898,37 @@ def _frame(row, cols, corner, frame_on, alien_pct=None, now=0):
     track = gap - 2  # rule cells between the leading space and the corner
     fill = "─" * track
     if alien_pct is not None and track >= 10:
-        mood = 0 if alien_pct < WARN_PCT else (1 if alien_pct < RED_PCT else 2)
         tick = now // 10  # struts every 10s; visible with a short refreshInterval
-        sprite = ALIEN_FRAMES[mood][tick % 2]
-        color = (NEON_GREEN, NEON_ORG, NEON_RED)[mood]
+        if pres is None:
+            mood = 0 if alien_pct < WARN_PCT else (1 if alien_pct < RED_PCT else 2)
+            sprite = ALIEN_FRAMES[mood][tick % 2]
+            color = (NEON_GREEN, NEON_ORG, NEON_RED)[mood]
+            speed, bubble = ALIEN_SPEEDS[mood], ""
+        else:
+            mood = pres.get("mood") if pres.get("mood") in MOOD_SPEEDS else "calm"
+            frames = SPRITES.get(pres.get("sprite"), SPRITES["alien"])[mood]
+            sprite, color = frames[tick % 2], MOOD_COLORS[mood]
+            since = int(pres.get("since") or 0)
+            speed = MOOD_SPEEDS[mood]
+            if mood == "yours" and now - since < WAVE_S:
+                speed = 0
+            if speed == 0:  # park where a calm cruise stood when the mood began
+                tick = since // 10
+                speed = 1
+            bubble = pres.get("bubble") or ""
         span = track - len(sprite)
-        t = tick * ALIEN_SPEEDS[mood] % (2 * span)
+        t = tick * speed % (2 * span)
         pos = t if t <= span else 2 * span - t
-        fill = "{}{}{}{}{}{}".format("─" * pos, R + color, sprite,
-                                     R + RULE, "─" * (span - pos), "")
+        side, bubble = _place_bubble(pos, span, bubble, t < span) if bubble else (0, "")
+        bw = 1 + vwidth(bubble) if side else 0
+        left = "─" * (pos - bw if side == -1 else pos)
+        right = "─" * (span - pos - bw if side == 1 else span - pos)
+        if side == -1:
+            left += R + BUBBLE + bubble + R + RULE + "╶"
+        mid = R + color + sprite + R + RULE
+        if side == 1:
+            mid += "╴" + R + BUBBLE + bubble + R + RULE
+        fill = left + mid + right
     return "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, corner, R)
 
 
@@ -679,13 +1181,17 @@ def render(data, cols, now):
         else:
             rl_rich = False
 
-    alien_pct = None
+    alien_pct = pres = None
     if os.environ.get("RETRO_HUD_ALIEN", "1") != "0":
-        alien_pct = max(clamp(ctx_pct, 0, 100),
-                        clamp(rl5_pct, 0, 100) if has_rl else 0,
-                        clamp(rl7_pct, 0, 100) if has_rl else 0)
+        limit_pct = max(clamp(rl5_pct, 0, 100), clamp(rl7_pct, 0, 100)) if has_rl else 0
+        alien_pct = max(clamp(ctx_pct, 0, 100), limit_pct)
+        try:
+            pres = presence(data, now, alien_pct, clamp(ctx_pct, 0, 100),
+                            limit_pct, round(cost, 2))
+        except Exception:  # presence is decoration: never cost the bar
+            pres = None
 
-    return [_frame(row1, cols, "┐", frame_on, alien_pct, now),
+    return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres),
             _frame(row2, cols, "┘", frame_on)]
 
 

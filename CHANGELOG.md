@@ -4,6 +4,54 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.9.0] — 2026-10-22
+
+### Added
+- **Agent presence.** The alien on the top rule now follows the agent
+  running in the session, not just the gauges. It hustles while the agent
+  works (`/o.o/`), waves when the turn is yours (`\^.^/`), beckons at a
+  pending permission prompt (`/o.o?`), flinches at a burst of tool errors
+  (`/>.<\`: two or more within 60s, held 30s), then dozes (`/-_-\`, after
+  10 min) and sleeps (`/_._\`, after 60 min). Mood precedence: red-zone
+  gauge → error → amber-zone gauge → what the agent is doing → calm.
+- The state comes from a bounded tail of the session transcript (64 KB,
+  widened once to 1 MB when a single huge entry hides every message).
+  Only entry type, stop reason, error flag and timestamp are read, never
+  message text. Meta entries and harness markers (`<command-name>`, …)
+  don't count as the user; `[Request interrupted` hands the turn back.
+- `presence-hook.sh` and `install.sh --hooks`: optional Claude Code hooks
+  (`Stop`, `UserPromptSubmit`, `Notification` for `permission_prompt` /
+  `idle_prompt`) that log what the transcript can't show, above all a
+  pending permission prompt (the new `needs` state). When a hook's report
+  is newer than the transcript, it wins. The merge into `settings.json`
+  makes a backup, is idempotent, and leaves other hooks untouched;
+  `uninstall.sh` removes the hooks again.
+- Speech bubbles of up to 18 characters on the rule beside the sprite.
+  Sources, in priority order: an **events channel**
+  (`~/.cache/retro-hud/<session_id>.events.jsonl`, one
+  `{"ts", "text", "ttl"}` per line, which any local tool may append to);
+  state changes, once per transition (`ready`, `need you`, `hm.`,
+  `compact?`, `limit soon`); and rare idle quips. A bubble only takes
+  rule cells, so the frame never shifts.
+- A per-session state file (`<session_id>.state.json`, written
+  atomically) remembers transitions and keeps a snapshot (state, since,
+  context %, worst limit %, cost). It honours `mute_until` and `sprite`
+  set by other tools. Files untouched for 7 days are pruned. A write
+  failure means no bubbles, never a broken bar.
+- Sprite sets: `RETRO_HUD_SPRITE=alien|cat|robot|ghost`, every mood two
+  frames at width 5.
+- Knobs: `RETRO_HUD_PRESENCE=0` (gauge-only alien, as before),
+  `RETRO_HUD_AGENT_NAME`, `RETRO_HUD_QUIPS=0`, `RETRO_HUD_IDLE_MIN`,
+  `RETRO_HUD_SLEEP_MIN`, `RETRO_HUD_CACHE_DIR`.
+
+### Notes
+- Presence is on by default. Rows 1 and 2 are unchanged; only the top
+  rule redraws. With no transcript (or presence off) the output is
+  byte-identical to v2.7.0.
+- Without the hooks, a pending permission prompt reads as "working".
+- `statusLine.refreshInterval` is required for idle/asleep and for
+  bubbles to expire.
+
 ## [v2.8.0] — 2026-10-22
 
 ### Added
