@@ -14,6 +14,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_MARGIN` | `3` | columns kept free at the right edge |
 | `RETRO_HUD_WIDTH` | — | hard width override when `$COLUMNS` is wrong |
 | `RETRO_HUD_EMOJI` | `2` | `1`: count emoji as one cell; `0`: skip the folder emoji |
+| `RETRO_HUD_HOME_URL` | — | end row 2 with a hyperlinked `⌂`: a jump-home link for multi-session setups. Point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions. Unset or empty: no glyph |
 
 Example:
 

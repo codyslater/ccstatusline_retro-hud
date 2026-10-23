@@ -59,6 +59,7 @@ To remove: `bash uninstall.sh`.
 | Cache hit rate | `cache 94%` in $\color{#00ffff}{\textsf{cyan}}$ | terminals ≥ 140 cols |
 | Duration / cost | `T:1h29m` in $\color{#ff0087}{\textsf{pink}}$ / `$40.86` in $\color{#ffff00}{\textsf{yellow}}$ | always |
 | Agent / worktree | `▐█ reviewer` in $\color{#00ffff}{\textsf{cyan}}$ / `⎇ feature-x` in $\color{#ff0087}{\textsf{pink}}$ | `--agent` / `--worktree` sessions |
+| Home link | `⌂` in $\color{#00ff00}{\textsf{neon green}}$, hyperlinked: a jump-home link for multi-session setups — point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions | `RETRO_HUD_HOME_URL` set; always the last segment, never dropped as the terminal narrows |
 
 ### Rate-limit label escalation
 

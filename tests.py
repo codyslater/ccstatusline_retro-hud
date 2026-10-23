@@ -311,6 +311,66 @@ class TestWidthKnobs(unittest.TestCase):
         self.assertEqual(max(sl.vislen(l) for l in out.splitlines()), 80)
 
 
+class TestHomeLink(unittest.TestCase):
+    URL = "example-home://jump?to=work"
+    # sha256 of "\n".join(render(FULL, cols, NOW)) as rendered by v2.6.0,
+    # before RETRO_HUD_HOME_URL existed: unset must stay byte-identical.
+    GOLDEN = {
+        60: "cc59a504bdf88a19651e861bf4c70a2c8998ce4c4283268444291d3bb3dcec64",
+        100: "9e54e4c8ea31cdd2be077a306755e33fff053e9d5183b59a1ed101a46bc12682",
+        160: "4b35578c5f291ba954f0aa8c233feb9cd322c7f8074649f30ae8314612e37573",
+        220: "03b04902deb4e7809295836b812780ce0b7b51a458627e2af4edb088b2f00622",
+    }
+
+    def setUp(self):
+        self._saved = os.environ.pop("RETRO_HUD_HOME_URL", None)
+
+    def tearDown(self):
+        os.environ.pop("RETRO_HUD_HOME_URL", None)
+        if self._saved is not None:
+            os.environ["RETRO_HUD_HOME_URL"] = self._saved
+
+    def digest(self, cols):
+        import hashlib
+        rows = sl.render(copy.deepcopy(FULL), cols, NOW)
+        return hashlib.sha256("\n".join(rows).encode()).hexdigest()
+
+    def test_unset_is_byte_identical_to_previous_release(self):
+        for cols, want in self.GOLDEN.items():
+            self.assertEqual(self.digest(cols), want, "cols={}".format(cols))
+
+    def test_empty_or_blank_counts_as_unset(self):
+        for val in ("", "   "):
+            os.environ["RETRO_HUD_HOME_URL"] = val
+            for cols, want in self.GOLDEN.items():
+                self.assertEqual(self.digest(cols), want, "val={!r}".format(val))
+
+    def test_home_glyph_is_last_segment_of_row2(self):
+        os.environ["RETRO_HUD_HOME_URL"] = self.URL
+        rows = sl.render(copy.deepcopy(FULL), 220, NOW)
+        self.assertIn("\x1b]8;;" + self.URL + "\a⌂\x1b]8;;\a", rows[1])
+        plain = sl.strip_ansi(rows[1])
+        self.assertRegex(plain, r"▐█ reviewer // ⌂ ─+┘$")
+        self.assertNotIn("⌂", sl.strip_ansi(rows[0]))
+
+    def test_home_glyph_survives_every_width(self):
+        os.environ["RETRO_HUD_HOME_URL"] = self.URL
+        for payload in (FULL, MINIMAL, OVERLOAD, {}):
+            for cols in range(20, 241, 5):
+                rows = sl.render(copy.deepcopy(payload), cols, NOW)
+                self.assertIn("⌂", sl.strip_ansi(rows[1]), "cols={}".format(cols))
+                if cols < 50:  # same floor as TestWidth's fit guarantee
+                    continue
+                for row in rows:
+                    self.assertLessEqual(sl.vislen(row), cols, "cols={}".format(cols))
+
+    def test_control_chars_in_url_cannot_escape_the_link(self):
+        os.environ["RETRO_HUD_HOME_URL"] = "x://a\x07\x1b[31mb\nc"
+        row = sl.render(copy.deepcopy(MINIMAL), 160, NOW)[1]
+        self.assertIn("\x1b]8;;x://a[31mbc\a⌂", row)
+        self.assertNotIn("\n", row)
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")

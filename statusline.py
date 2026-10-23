@@ -27,6 +27,8 @@ Env toggles:
     RETRO_HUD_EMOJI=2            2: emoji are two cells (normal); 1: count them
                                  as one cell (some WSL/VS Code terminals);
                                  0: skip the folder emoji entirely
+    RETRO_HUD_HOME_URL=<url>     end row 2 with a ⌂ jump-home link (OSC 8) to
+                                 any URL your desktop can open; never dropped
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
@@ -36,7 +38,7 @@ the % is always the token touching its own bar. Each gauge escalates on
 its own, and the pinned label is the last thing row 2 gives up when the
 terminal narrows, so neither number flickers away under you.
 """
-__version__ = "2.6.0"
+__version__ = "2.7.0"
 
 import json
 import os
@@ -580,6 +582,12 @@ def render(data, cols, now):
             parts.append("{}⎇ {}{}".format(NEON_PINK, worktree, R))
         return " ".join(parts)
 
+    # Optional jump-home link: one cell, never dropped by the ladder below.
+    # Control characters are stripped so the URL can't break out of OSC 8.
+    home_url = "".join(ch for ch in os.environ.get("RETRO_HUD_HOME_URL", "")
+                       if ch.isprintable()).strip()
+    home_seg = NEON_GREEN + link(home_url, "⌂") + R if home_url else ""
+
     show_lines = lines_add > 0 or lines_del > 0
     show_dur = True
     show_cache = cache_denom > 0 and cols >= 140
@@ -599,6 +607,7 @@ def render(data, cols, now):
         segs.append(NEON_YEL + ("${:.2f}".format(cost) if cost < 100 else "${:.0f}".format(cost)) + R)
         if show_agent:
             segs.append(agent_seg())
+        segs.append(home_seg)
         row2 = _join(NEON_GREEN + "└─" + R, segs)
         if vislen(row2) <= cols:
             break

@@ -4,6 +4,17 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v2.7.0] — 2026-10-22
+
+### Added
+- `RETRO_HUD_HOME_URL`: when set, row 2 ends with a neon-green `⌂`
+  hyperlinked (OSC 8) to that URL — a jump-home link for multi-session
+  setups. Point it at any URL your desktop can open, e.g. a custom scheme
+  that switches tmux sessions. It is one cell, always the last segment of
+  row 2, and never dropped by the width-degradation ladder. Control
+  characters in the URL are stripped so it cannot break out of the link.
+  Unset or empty, the output is byte-identical to v2.6.0.
+
 ## [v2.6.0] — 2026-09-15
 
 ### Changed
