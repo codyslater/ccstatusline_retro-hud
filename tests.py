@@ -1240,10 +1240,11 @@ class TestHandlerAgent(ShellHarness):
         self.run_handler(self.url("agent"))
         _, _, items = self.menu()
         self.assertEqual([i[0] for i in items],
-                         ["wave", "quiet 1h", "sprite ▸", "reroll", "status"])
-        self.assertEqual(items[3][1], "r")
+                         ["wave", "quiet 1h", "sprite ▸", "size ▸", "reroll", "status"])
+        self.assertEqual((items[3][1], items[4][1]), ("z", "r"))
         prefix = "run-shell -b \"'{}' do agent '%7' ".format(HANDLER)
-        self.assertEqual(items[3][2], prefix + 'reroll"')
+        self.assertEqual(items[3][2], prefix + 'sizes"')
+        self.assertEqual(items[4][2], prefix + 'reroll"')
 
     def test_creature_sprite_submenu_lists_families(self):
         self.map_pane()
@@ -1265,6 +1266,49 @@ class TestHandlerAgent(ShellHarness):
         first = st["seed"]
         self.run_handler("do", "agent", "%7", "reroll")
         self.assertNotEqual(self.get_state()["seed"], first)
+
+    def test_size_submenu(self):
+        self.map_pane()
+        self.put_state({"creature": "alien"})
+        self.run_handler("do", "agent", "%7", "sizes")
+        _, title, items = self.menu()
+        self.assertIn("size", title)
+        names = ["tiny", "big", "tall", "default"]
+        self.assertEqual([i[0] for i in items], names)
+        prefix = "run-shell -b \"'{}' do agent '%7' size ".format(HANDLER)
+        self.assertEqual([i[2] for i in items], [prefix + n + '"' for n in names])
+
+    def test_do_size_writes_and_default_removes(self):
+        self.map_pane()
+        self.put_state({"creature": "alien", "seed": 3})
+        for name in ("big", "tall", "tiny"):
+            self.run_handler("do", "agent", "%7", "size", name)
+            self.assertEqual(self.get_state(), {"creature": "alien", "seed": 3, "size": name})
+        self.run_handler("do", "agent", "%7", "size", "default")
+        self.assertEqual(self.get_state(), {"creature": "alien", "seed": 3})
+
+    def test_do_size_rejects_unknown_sizes(self):
+        self.map_pane()
+        self.put_state({"creature": "alien"})
+        for args in (("size", "huge"), ("size",), ("size", "big", "x"), ("size", "big;id"),
+                     ("sizes", "x")):
+            self.run_handler("do", "agent", "%7", *args)
+            self.assertEqual(self.get_state(), {"creature": "alien"}, args)
+        self.assertIn("reject", self.handler_log())
+
+    def test_size_reaches_the_hud(self):
+        # the state file's size, written by the menu, is what the HUD draws
+        self.map_pane()
+        self.put_state({"creature": "alien"})
+        self.run_handler("do", "agent", "%7", "size", "tall")
+        saved = os.environ.get("RETRO_HUD_CACHE_DIR")
+        os.environ["RETRO_HUD_CACHE_DIR"] = self.cache
+        os.environ["RETRO_HUD_CREATURE"] = "tiny"
+        try:
+            self.assertEqual(sl.creature_size({"session_id": self.SID}), "tall")
+        finally:
+            os.environ["RETRO_HUD_CACHE_DIR"] = saved
+            os.environ["RETRO_HUD_CREATURE"] = "0"
 
     def test_family_sprites_are_accepted(self):
         self.map_pane()

@@ -18,6 +18,8 @@
 #   retro-hud-handler.sh do [-S <sock>] confirm-clear <pane>
 #   retro-hud-handler.sh do [-S <sock>] agent <pane> wave|quiet|sprites|reroll|status
 #   retro-hud-handler.sh do [-S <sock>] agent <pane> sprite <set or family>|default
+#   retro-hud-handler.sh do [-S <sock>] agent <pane> sizes
+#   retro-hud-handler.sh do [-S <sock>] agent <pane> size tiny|big|tall|default
 #
 # Settings come from the environment or, because a desktop-launched
 # handler never reads your shell rc files, from ~/.config/retro-hud/env:
@@ -196,13 +198,14 @@ send_slash() {  # pane, command, [arg]
 
 # ── agent helpers: BEGIN ──
 # The agent menu talks to the HUD through its presence cache, never to
-# Claude: the state file (<sid>.state.json, keys mute_until, sprite and
-# seed; the HUD's `creature` key says the pixel creature is on)
+# Claude: the state file (<sid>.state.json, keys mute_until, sprite, size
+# and seed; the HUD's `creature` key says the pixel creature is on)
 # and the events channel (<sid>.events.jsonl). The HUD records which
 # session a pane shows in <cache>/pane-<N>.sid (pane %N) while click
 # actions are on, so the session is found from the pane, never the URL.
 SPRITE_SETS="alien cat robot ghost"
 FAMILIES="blob beast alien bot"  # the pixel creature's families
+SIZES="tiny big tall"            # the pixel creature's sizes
 QUIET_S=3600
 WAVE_TTL=10
 AGENT_NAME=${RETRO_HUD_AGENT_NAME:-$cfg_agent_name}
@@ -274,6 +277,10 @@ elif op == "sprite" and args[0] == "default":
     obj.pop("sprite", None)
 elif op == "sprite":
     obj["sprite"] = args[0]
+elif op == "size" and args[0] == "default":
+    obj.pop("size", None)
+elif op == "size":
+    obj["size"] = args[0]
 else:
     sys.exit("unknown op")
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
@@ -325,7 +332,10 @@ creature_on() { [ "$(state_py creature 2>/dev/null)" = on ]; }
 
 agent_menu() {
     local pane=$1 extra=()
-    if creature_on; then extra=("reroll" r "$(menu_cmd agent "$pane" reroll)"); fi
+    if creature_on; then
+        extra=("size ▸" z "$(menu_cmd agent "$pane" sizes)"
+               "reroll" r "$(menu_cmd agent "$pane" reroll)")
+    fi
     show_menu "$AGENT_NAME" \
         "wave" w "$(menu_cmd agent "$pane" wave)" \
         "quiet 1h" q "$(menu_cmd agent "$pane" quiet)" \
@@ -344,6 +354,14 @@ agent_do() {  # pane, subcommand, [arg] (validated by the caller)
             ;;
         quiet) state_py mute "$QUIET_S" || log "agent: quiet failed" ;;
         sprite) state_py sprite "$3" || log "agent: sprite failed" ;;
+        size) state_py size "$3" || log "agent: size failed" ;;
+        sizes)
+            for n in $SIZES default; do
+                i=$((i + 1))
+                items+=("$n" "$i" "$(menu_cmd agent "$pane" size "$n")")
+            done
+            show_menu "$AGENT_NAME: size" "${items[@]}"
+            ;;
         reroll)
             n=$(state_py reroll) || n=""
             if [[ $n =~ ^[0-9]+$ ]]; then
@@ -394,7 +412,9 @@ if [ "${1-}" = "do" ]; then
             ;;
         agent)
             case "${1-}:$#" in
-                wave:1 | quiet:1 | sprites:1 | reroll:1 | status:1) ;;
+                wave:1 | quiet:1 | sprites:1 | sizes:1 | reroll:1 | status:1) ;;
+                size:2) [[ " $SIZES default " == *" $2 "* && $2 =~ ^[a-z]+$ ]] ||
+                    reject "do agent size: $(printf '%q' "$2")" ;;
                 sprite:2) [[ " $SPRITE_SETS $FAMILIES default " == *" $2 "* && $2 =~ ^[a-z]+$ ]] ||
                     reject "do agent sprite: $(printf '%q' "$2")" ;;
                 *) reject "do agent: $(printf '%q ' "$@")" ;;
