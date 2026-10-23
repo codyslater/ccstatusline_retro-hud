@@ -1228,6 +1228,47 @@ class TestHandlerAgent(ShellHarness):
         self.assertEqual([i[2] for i in items],
                          [prefix + n + '"' for n in ("alien", "cat", "robot", "ghost", "default")])
 
+    def test_creature_menu_offers_reroll(self):
+        self.map_pane()
+        self.put_state({"state": "yours", "creature": "alien"})
+        self.run_handler(self.url("agent"))
+        _, _, items = self.menu()
+        self.assertEqual([i[0] for i in items],
+                         ["wave", "quiet 1h", "sprite ▸", "reroll", "status"])
+        self.assertEqual(items[3][1], "r")
+        prefix = "run-shell -b \"'{}' do agent '%7' ".format(HANDLER)
+        self.assertEqual(items[3][2], prefix + 'reroll"')
+
+    def test_creature_sprite_submenu_lists_families(self):
+        self.map_pane()
+        self.put_state({"creature": "bot"})
+        self.run_handler("do", "agent", "%7", "sprites")
+        _, _, items = self.menu()
+        self.assertEqual([i[0] for i in items], ["blob", "beast", "alien", "bot", "default"])
+
+    def test_reroll_writes_a_seed_and_says_how_to_pin_it(self):
+        self.map_pane()
+        self.put_state({"creature": "alien", "mute_until": 5})
+        self.run_handler("do", "agent", "%7", "reroll")
+        st = self.get_state()
+        self.assertEqual(st["mute_until"], 5)
+        self.assertIsInstance(st["seed"], int)
+        self.assertTrue(0 <= st["seed"] < 2 ** 32)
+        msg = self.messages()[-1]
+        self.assertIn("RETRO_HUD_CREATURE_SEED={}".format(st["seed"]), msg)
+        first = st["seed"]
+        self.run_handler("do", "agent", "%7", "reroll")
+        self.assertNotEqual(self.get_state()["seed"], first)
+
+    def test_family_sprites_are_accepted(self):
+        self.map_pane()
+        self.put_state({"creature": "alien"})
+        for fam in ("blob", "beast", "bot", "alien"):
+            self.run_handler("do", "agent", "%7", "sprite", fam)
+            self.assertEqual(self.get_state()["sprite"], fam)
+        self.run_handler("do", "agent", "%7", "reroll", "x")
+        self.assertNotIn("seed", self.get_state())
+
     def test_do_status_composes_the_snapshot(self):
         self.map_pane()
         self.put_state({"state": "working", "since": int(time.time()) - 185,
@@ -1345,6 +1386,34 @@ class TestAgentEndToEnd(ShellHarness):
         self.assertIn("working", msg)
         self.assertIn("ctx 0%", msg)
 
+
+    def test_reroll_reaches_the_creature(self):
+        os.environ["RETRO_HUD_CREATURE"] = "1"
+        try:
+            p = copy.deepcopy(MINIMAL)
+            p["transcript_path"] = self.transcript
+            p["session_id"] = self.SID
+            before = sl.render(copy.deepcopy(p), 160, self.t0 + 100)
+            self.run_handler(self.url("agent"))
+            labels = [i[0] for i in self.menu()[2]]
+            self.assertIn("reroll", labels)
+            self.run_handler("do", "agent", "%7", "reroll")
+            with open(os.path.join(self.cache, self.SID + ".state.json")) as f:
+                seed = json.load(f)["seed"]
+            self.assertIn("RETRO_HUD_CREATURE_SEED={}".format(seed),
+                          self.tmux_calls("display-message")[-1][-1])
+            after = sl.render(copy.deepcopy(p), 160, self.t0 + 100)
+            self.assertNotEqual(after[:2], before[:2])
+            os.environ["RETRO_HUD_CREATURE_SEED"] = str(seed)
+            with open(os.path.join(self.cache, self.SID + ".state.json")) as f:
+                st = json.load(f)
+            st.pop("seed")
+            with open(os.path.join(self.cache, self.SID + ".state.json"), "w") as f:
+                json.dump(st, f)
+            self.assertEqual(sl.render(copy.deepcopy(p), 160, self.t0 + 100)[:2], after[:2])
+        finally:
+            os.environ["RETRO_HUD_CREATURE"] = "0"
+            os.environ.pop("RETRO_HUD_CREATURE_SEED", None)
 
 class TestHandlerInstall(ShellHarness):
     DESKTOP = os.path.join(".local", "share", "applications", "retro-hud-url-handler.desktop")

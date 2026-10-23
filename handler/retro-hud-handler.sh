@@ -16,8 +16,8 @@
 #
 #   retro-hud-handler.sh do [-S <sock>] send <pane> <command> [<arg>]
 #   retro-hud-handler.sh do [-S <sock>] confirm-clear <pane>
-#   retro-hud-handler.sh do [-S <sock>] agent <pane> wave|quiet|sprites|status
-#   retro-hud-handler.sh do [-S <sock>] agent <pane> sprite alien|cat|robot|ghost|default
+#   retro-hud-handler.sh do [-S <sock>] agent <pane> wave|quiet|sprites|reroll|status
+#   retro-hud-handler.sh do [-S <sock>] agent <pane> sprite <set or family>|default
 #
 # Settings come from the environment or, because a desktop-launched
 # handler never reads your shell rc files, from ~/.config/retro-hud/env:
@@ -193,11 +193,13 @@ send_slash() {  # pane, command, [arg]
 
 # ── agent helpers: BEGIN ──
 # The agent menu talks to the HUD through its presence cache, never to
-# Claude: the state file (<sid>.state.json, keys mute_until and sprite)
+# Claude: the state file (<sid>.state.json, keys mute_until, sprite and
+# seed; the HUD's `creature` key says the pixel creature is on)
 # and the events channel (<sid>.events.jsonl). The HUD records which
 # session a pane shows in <cache>/pane-<N>.sid (pane %N) while click
 # actions are on, so the session is found from the pane, never the URL.
 SPRITE_SETS="alien cat robot ghost"
+FAMILIES="blob beast alien bot"  # the pixel creature's families
 QUIET_S=3600
 WAVE_TTL=10
 AGENT_NAME=${RETRO_HUD_AGENT_NAME:-$cfg_agent_name}
@@ -258,8 +260,13 @@ if op == "status":
                       "limit " + ("%d%%" % lim if lim is not None else "?"),
                       "$%.2f" % cost if cost is not None else "$?"]))
     sys.exit(0)
+if op == "creature":
+    print("on" if isinstance(obj.get("creature"), str) else "off")
+    sys.exit(0)
 if op == "mute":
     obj["mute_until"] = int(time.time()) + int(args[0])
+elif op == "reroll":
+    obj["seed"] = int.from_bytes(os.urandom(4), "big")
 elif op == "sprite" and args[0] == "default":
     obj.pop("sprite", None)
 elif op == "sprite":
@@ -275,6 +282,8 @@ try:
 except BaseException:
     os.unlink(tmp)
     raise
+if op == "reroll":
+    print(obj["seed"])
 '
 
 state_py() {  # op, [arg]; stdout is the result, errors go to the log
@@ -307,12 +316,18 @@ agent_target() {
     EVENTS_FILE="$CACHE/$sid.events.jsonl"
 }
 
+# Is the pixel creature on? The HUD records it in the state file, since
+# the handler never sees the statusline's environment.
+creature_on() { [ "$(state_py creature 2>/dev/null)" = on ]; }
+
 agent_menu() {
-    local pane=$1
+    local pane=$1 extra=()
+    if creature_on; then extra=("reroll" r "$(menu_cmd agent "$pane" reroll)"); fi
     show_menu "$AGENT_NAME" \
         "wave" w "$(menu_cmd agent "$pane" wave)" \
         "quiet 1h" q "$(menu_cmd agent "$pane" quiet)" \
         "sprite ▸" s "$(menu_cmd agent "$pane" sprites)" \
+        ${extra[@]+"${extra[@]}"} \
         "status" i "$(menu_cmd agent "$pane" status)"
 }
 
@@ -326,8 +341,19 @@ agent_do() {  # pane, subcommand, [arg] (validated by the caller)
             ;;
         quiet) state_py mute "$QUIET_S" || log "agent: quiet failed" ;;
         sprite) state_py sprite "$3" || log "agent: sprite failed" ;;
+        reroll)
+            n=$(state_py reroll) || n=""
+            if [[ $n =~ ^[0-9]+$ ]]; then
+                tm display-message -c "$CLIENT" \
+                    "$AGENT_NAME: new look; pin it with RETRO_HUD_CREATURE_SEED=$n" || true
+            else
+                log "agent: reroll failed"
+            fi
+            ;;
         sprites)
-            for n in $SPRITE_SETS default; do
+            local names=$SPRITE_SETS
+            if creature_on; then names=$FAMILIES; fi
+            for n in $names default; do
                 i=$((i + 1))
                 items+=("$n" "$i" "$(menu_cmd agent "$pane" sprite "$n")")
             done
@@ -365,8 +391,8 @@ if [ "${1-}" = "do" ]; then
             ;;
         agent)
             case "${1-}:$#" in
-                wave:1 | quiet:1 | sprites:1 | status:1) ;;
-                sprite:2) [[ " $SPRITE_SETS default " == *" $2 "* && $2 =~ ^[a-z]+$ ]] ||
+                wave:1 | quiet:1 | sprites:1 | reroll:1 | status:1) ;;
+                sprite:2) [[ " $SPRITE_SETS $FAMILIES default " == *" $2 "* && $2 =~ ^[a-z]+$ ]] ||
                     reject "do agent sprite: $(printf '%q' "$2")" ;;
                 *) reject "do agent: $(printf '%q ' "$@")" ;;
             esac
