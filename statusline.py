@@ -247,6 +247,77 @@ def trunc(s, maxw):
     return out + ".."
 
 
+# ── cell compositor: lay creature cells over a rendered row ──
+_CORNERS = frozenset("┌┐└┘")
+
+
+def split_cells(s):
+    """(cells, tail): `s` as its visible cells, each [escapes before it,
+    its character]. A wide character is followed by ["", ""], the second
+    cell it owns; `tail` is the escapes after the last cell. Joining them
+    back (join_cells) gives `s` byte for byte."""
+    cells, esc, at = [], "", 0
+    for m in list(_ANSI_RE.finditer(s)) + [None]:
+        for ch in s[at:m.start() if m else len(s)]:
+            cells.append([esc, ch])
+            esc = ""
+            if vwidth(ch) == 2:
+                cells.append(["", ""])
+        if m:
+            esc += m.group(0)
+            at = m.end()
+    return cells, esc
+
+
+def join_cells(cells, tail=""):
+    return "".join(e + t for e, t in cells) + tail
+
+
+def _sgr_after(state, esc):
+    """The SGR codes in force after `esc`: set codes add up, a reset
+    clears them (the HUD never uses partial resets)."""
+    for m in re.finditer(r"\x1b\[([0-9;]*)m", esc):
+        p = m.group(1)
+        state = "" if p in ("", "0") else (m.group(0) if p.startswith("0;") else state + m.group(0))
+    return state
+
+
+def overlay(row, col, items):
+    """`row` with `items` (one-cell strings, None = see-through) laid over
+    its cells from `col` on. Only cell text is replaced: every escape of
+    the row stays where it was, so a colour or a link that spans the
+    covered cells keeps its open and close, and the colour in force is set
+    again after each covered run. A wide character half covered is
+    replaced whole (its other half becomes a space). The frame corners and
+    the cell after a leading corner (the ┌─ / └─ leads) are never covered.
+    The visible width is unchanged."""
+    cells, tail = split_cells(row)
+    n = len(cells)
+    keep = {i for i in range(n) if cells[i][1] in _CORNERS}
+    if n > 1 and cells[0][1] in ("┌", "└"):
+        keep.add(1)
+    put = {}
+    for k, item in enumerate(items):
+        i = col + k
+        if item is not None and 0 <= i < n and i not in keep:
+            put[i] = item
+    for i in list(put):
+        if cells[i][1] == "" and i - 1 not in put:      # second half only
+            put[i - 1] = " "
+        elif i + 1 < n and cells[i + 1][1] == "" and cells[i][1] and i + 1 not in put:
+            put[i + 1] = " "                             # first half only
+    out, state = [], ""
+    for i, (esc, ch) in enumerate(cells):
+        state = _sgr_after(state, esc)
+        if i in put:
+            out.append(esc + R + put[i] + R)
+            if i + 1 not in put and state:
+                out.append(state)
+        else:
+            out.append(esc + ch)
+    return "".join(out) + tail
+
+
 def clamp(n, lo, hi):
     return max(lo, min(n, hi))
 

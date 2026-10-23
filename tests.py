@@ -21,6 +21,9 @@ for _k in ("RETRO_HUD_PRESENCE", "RETRO_HUD_SPRITE", "RETRO_HUD_AGENT_NAME",
 # The 2.x suite pins the two-row HUD: RETRO_HUD_CREATURE=0 must stay
 # byte-identical to it. Creature tests switch it on (CreatureCase).
 os.environ["RETRO_HUD_CREATURE"] = "0"
+# Excursions would make a creature test depend on the minute it runs in;
+# ExcursionCase switches them on.
+os.environ["RETRO_HUD_EXCURSIONS"] = "0"
 _SUITE_TMP = tempfile.mkdtemp(prefix="retro-hud-tests-")
 os.environ["RETRO_HUD_CACHE_DIR"] = os.path.join(_SUITE_TMP, "cache")
 
@@ -3709,6 +3712,98 @@ class TestBigFrame(CreatureCase):
                 else:
                     self.assertEqual(on[1], off[1], cols)
         self.assertTrue(seen)
+
+
+class TestCompositor(unittest.TestCase):
+    """A row as visible cells, escapes attached; creature cells laid over
+    them without moving anything."""
+    LINK_OPEN = "\033]8;;https://example.com/b\a"
+    LINK_CLOSE = "\033]8;;\a"
+    ROW = (sl.NEON_GREEN + "┌─" + sl.R + sl.MODEL_BOX + "[" + sl.R + " X " +
+           sl.MODEL_BOX + "]" + sl.R + sl.SEP + sl.NEON_WHT + "\U0001F4C2 dir" + sl.R +
+           sl.SEP + sl.BRANCH_BADGE + " ⎇ " + LINK_OPEN + "main-branch" + LINK_CLOSE +
+           " " + sl.R + " " + sl.RULE + "──────" + sl.R + sl.NEON_GREEN + "┐" + sl.R)
+    CELL = "\033[38;5;46m⣿" + sl.R
+
+    @staticmethod
+    def escapes(s):
+        return [m.group(0) for m in sl._ANSI_RE.finditer(s)]
+
+    def test_split_round_trips_and_counts_cells(self):
+        cells, tail = sl.split_cells(self.ROW)
+        self.assertEqual(sl.join_cells(cells, tail), self.ROW)
+        self.assertEqual(len(cells), sl.vislen(self.ROW))
+        self.assertEqual(tail, sl.R)
+        self.assertEqual(cells[0], [sl.NEON_GREEN, "┌"])
+        i = [t for _, t in cells].index("\U0001F4C2")
+        self.assertEqual(cells[i + 1], ["", ""])  # the emoji owns two cells
+
+    def test_split_follows_the_emoji_width_knob(self):
+        old = sl._EMOJI_W
+        try:
+            sl._EMOJI_W = 1
+            cells, _ = sl.split_cells("a\U0001F4C2b")
+            self.assertEqual([t for _, t in cells], ["a", "\U0001F4C2", "b"])
+        finally:
+            sl._EMOJI_W = old
+
+    def test_overlay_keeps_width_and_every_escape_in_order(self):
+        n = sl.vislen(self.ROW)
+        for col in range(-3, n + 3):
+            for k in (1, 3, 7, 30):
+                out = sl.overlay(self.ROW, col, [self.CELL] * k)
+                self.assertEqual(sl.vislen(out), n, (col, k))
+                it = iter(self.escapes(out))  # the row's escapes, an ordered subsequence
+                self.assertTrue(all(e in it for e in self.escapes(self.ROW)), (col, k))
+                self.assertEqual(out.count(self.LINK_OPEN), 1)
+                self.assertEqual(out.count(self.LINK_CLOSE), 1)
+                self.assertLess(out.index(self.LINK_OPEN), out.index(self.LINK_CLOSE))
+
+    def test_overlay_replaces_text_only(self):
+        plain = sl.strip_ansi(self.ROW)
+        out = sl.strip_ansi(sl.overlay(self.ROW, 4, [self.CELL] * 3))
+        self.assertEqual(out[:4] + out[7:], plain[:4] + plain[7:])
+        self.assertEqual(out[4:7], "⣿⣿⣿")
+
+    def test_transparent_cells_leave_the_row_alone(self):
+        self.assertEqual(sl.strip_ansi(sl.overlay(self.ROW, 3, [None, self.CELL, None])),
+                         sl.strip_ansi(self.ROW)[:4] + "⣿" + sl.strip_ansi(self.ROW)[5:])
+
+    def test_colour_and_link_across_the_overlay_stay_intact(self):
+        cells, _ = sl.split_cells(self.ROW)
+        texts = [t for _, t in cells]
+        b = texts.index("m")  # inside the badge and the link
+        out = sl.overlay(self.ROW, b, [self.CELL] * 3)
+        after = out.index("n-branch")  # the first uncovered cell after the run
+        before = out[:after]
+        # the badge colour is set again before the next cell, after the reset
+        self.assertTrue(before.endswith(sl.BRANCH_BADGE), repr(before[-40:]))
+        # and the run itself sits between the link's open and close
+        self.assertLess(out.index(self.LINK_OPEN), out.index("⣿"))
+        self.assertGreater(out.index(self.LINK_CLOSE), after)
+
+    def test_half_covered_wide_char_is_replaced_whole(self):
+        cells, _ = sl.split_cells(self.ROW)
+        i = [t for _, t in cells].index("\U0001F4C2")
+        for col in (i, i + 1):  # cover only its first, or only its second, cell
+            out = sl.overlay(self.ROW, col, [self.CELL])
+            self.assertNotIn("\U0001F4C2", out, col)
+            self.assertEqual(sl.vislen(out), sl.vislen(self.ROW), col)
+            self.assertIn("⣿", out)
+        out = sl.strip_ansi(sl.overlay(self.ROW, i + 1, [self.CELL]))
+        self.assertEqual(out[i:i + 2], " ⣿")
+        out = sl.strip_ansi(sl.overlay(self.ROW, i, [self.CELL]))
+        self.assertEqual(out[i:i + 2], "⣿ ")
+
+    def test_corners_and_leads_are_never_covered(self):
+        n = sl.vislen(self.ROW)
+        out = sl.strip_ansi(sl.overlay(self.ROW, 0, [self.CELL] * n))
+        self.assertEqual(out[:2], "┌─")
+        self.assertEqual(out[-1], "┐")
+        self.assertEqual(set(out[2:-1]), {"⣿"})
+        row2 = sl._frame(sl.NEON_GREEN + "└─" + sl.R + "42%", 30, "┘", True)
+        out = sl.strip_ansi(sl.overlay(row2, 0, [self.CELL] * 30))
+        self.assertEqual((out[:2], out[-1]), ("└─", "┘"))
 
 
 class TestCreatureCLI(unittest.TestCase):
