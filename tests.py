@@ -529,6 +529,342 @@ class TestClickActionLinks(unittest.TestCase):
                 self.assertEqual(plain, linked, "cols={}".format(cols))
 
 
+# ── shell-side tests: the reference handler and the installer ──
+# These run bash with a throwaway HOME and fake tmux / xdg-* commands, so
+# nothing touches the real desktop, tmux server or ~/.config.
+REPO = os.path.dirname(os.path.abspath(__file__))
+HANDLER = os.path.join(REPO, "handler", "retro-hud-handler.sh")
+
+FAKE_TMUX = r'''#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+with open(os.path.join(os.environ["HOME"], "tmux.log"), "a") as f:
+    f.write(json.dumps(argv) + "\n")
+cmd = argv[2:] if argv[:1] == ["-S"] else argv
+if os.environ.get("FAKE_TMUX_NOSERVER"):
+    sys.stderr.write("no server running\n")
+    sys.exit(1)
+if cmd[:1] == ["list-clients"]:
+    sys.stdout.write(os.environ.get("FAKE_TMUX_CLIENTS",
+                     "100 /dev/pts/1\n300 /dev/pts/3\n200 /dev/pts/2\n"))
+elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd:
+    sys.stdout.write(os.environ.get("FAKE_TMUX_PANE_CMD", "claude") + "\n")
+elif cmd[:1] == ["show-options"]:
+    sys.stdout.write(os.environ.get("FAKE_TMUX_FEATURES", "") + "\n")
+'''
+
+FAKE_LOGGER = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.path.join(os.environ["HOME"], os.path.basename(sys.argv[0]) + ".log"), "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\n")
+'''
+
+# xdg-mime stand-in: remembers one default per scheme in $HOME/.fake-mime
+FAKE_XDG_MIME = r'''#!/usr/bin/env python3
+import json, os, sys
+home = os.environ["HOME"]
+with open(os.path.join(home, "xdg-mime.log"), "a") as f:
+    f.write(json.dumps(sys.argv[1:]) + "\n")
+store = os.path.join(home, ".fake-mime")
+if sys.argv[1:3] == ["query", "default"]:
+    if os.path.exists(store):
+        sys.stdout.write(open(store).read() + "\n")
+elif sys.argv[1:2] == ["default"]:
+    open(store, "w").write(sys.argv[2])
+'''
+
+
+class ShellHarness(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="rh")
+        self.home = os.path.join(self.tmp, "h")
+        self.bin = os.path.join(self.home, ".local", "bin")
+        os.makedirs(self.bin)
+        for name, src in (("tmux", FAKE_TMUX), ("xdg-open", FAKE_LOGGER),
+                          ("update-desktop-database", FAKE_LOGGER),
+                          ("xdg-mime", FAKE_XDG_MIME)):
+            path = os.path.join(self.bin, name)
+            with open(path, "w") as f:
+                f.write(src)
+            os.chmod(path, 0o755)
+        self.work = os.path.join(self.tmp, "work dir")
+        os.makedirs(self.work)
+
+    def tearDown(self):
+        import shutil as sh
+        sh.rmtree(self.tmp, ignore_errors=True)
+
+    def env(self, extra=None):
+        # built from scratch: no XDG_* dirs or TMUX from the developer's shell
+        env = {"HOME": self.home, "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+        env.update(extra or {})
+        return env
+
+    def run_handler(self, *args, **extra):
+        return subprocess.run(["bash", HANDLER] + list(args), env=self.env(extra),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              timeout=20)
+
+    def log(self, name):
+        import json
+        path = os.path.join(self.home, name + ".log")
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def tmux_calls(self, verb=None):
+        calls = [c[2:] if c[:1] == ["-S"] else c for c in self.log("tmux")]
+        return [c for c in calls if verb is None or c[:1] == [verb]]
+
+    def handler_log(self):
+        path = os.path.join(self.home, ".cache", "retro-hud", "handler.log")
+        if not os.path.exists(path):
+            return ""
+        with open(path) as f:
+            return f.read()
+
+    def write_config(self, text):
+        d = os.path.join(self.home, ".config", "retro-hud")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "env"), "w") as f:
+            f.write(text)
+
+    def url(self, action, **q):
+        from urllib.parse import quote
+        q.setdefault("pane", "%7")
+        q.setdefault("cwd", self.work)
+        return "retro-hud://{}?{}".format(action, "&".join(
+            "{}={}".format(k, quote(v, safe="/")) for k, v in q.items()))
+
+    def menu(self):
+        """The one display-menu call: (client, title, [(label, key, command)])."""
+        menus = self.tmux_calls("display-menu")
+        self.assertEqual(len(menus), 1, self.log("tmux"))
+        argv = menus[0]
+        i = 1
+        opts = {}
+        while argv[i].startswith("-"):
+            opts[argv[i]] = argv[i + 1]
+            i += 2
+        rest = argv[i:]
+        items = [tuple(rest[j:j + 3]) for j in range(0, len(rest), 3)]
+        return opts.get("-c"), opts.get("-T"), items
+
+
+class TestHandlerRejects(ShellHarness):
+    def assert_rejected(self, *args, **extra):
+        p = self.run_handler(*args, **extra)
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.tmux_calls(), [], args)
+        self.assertEqual(self.log("xdg-open"), [], args)
+        self.assertIn("reject", self.handler_log(), args)
+
+    def test_argument_count(self):
+        self.assert_rejected()
+        self.assert_rejected(self.url("cost"), "extra")
+
+    def test_whitelist(self):
+        for bad in ("retro-hud://rm", "retro-hud://cost;id", "http://example.com",
+                    "retro-hud://cost?pane=%257;touch x", "retro-hud://cost?pane=$(id)",
+                    "retro-hud://costs?pane=%257", "retro-hud://cost/x",
+                    "retro-hud://cost?pane=%257\n", "RETRO-HUD://cost"):
+            self.assert_rejected(bad)
+
+    def test_crafted_pane(self):
+        for pane in ("%7;touch x", "7", "%", "%7 ", "%%7", "%7\n%8"):
+            self.assert_rejected(self.url("cost", pane=pane))
+        self.assert_rejected("retro-hud://cost?cwd=/tmp")   # pane required
+
+    def test_crafted_cwd(self):
+        for cwd in ("/no/such/dir", "relative", self.work + "\n/tmp", ""):
+            self.assert_rejected(self.url("diff", cwd=cwd))
+        self.assert_rejected("retro-hud://diff?pane=%257")  # diff needs cwd
+
+    def test_crafted_sock(self):
+        self.assert_rejected(self.url("cost", sock=self.work))        # a dir
+        self.assert_rejected(self.url("cost", sock="/no/such/sock"))
+
+    def test_crafted_effort_level(self):
+        self.assert_rejected(self.url("effort", cur="turbo"))
+
+    def test_nothing_runs_from_the_url(self):
+        marker = os.path.join(self.tmp, "pwned")
+        self.run_handler(self.url("cost", pane="%7$(touch {})".format(marker)))
+        self.run_handler(self.url("diff", cwd="$(touch {})".format(marker)))
+        self.assertFalse(os.path.exists(marker))
+
+    def test_unknown_query_keys_are_ignored(self):
+        p = self.run_handler(self.url("cost", sid="abc", extra="1"))
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(len(self.tmux_calls("send-keys")), 2)
+
+
+class TestHandlerActions(ShellHarness):
+    def test_cost_types_slash_cost(self):
+        p = self.run_handler(self.url("cost"))
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.tmux_calls("send-keys"),
+                         [["send-keys", "-t", "%7", "-l", "/cost"],
+                          ["send-keys", "-t", "%7", "Enter"]])
+        self.assertEqual(p.stdout, b"")
+
+    def test_send_refused_when_pane_is_not_claude(self):
+        self.run_handler(self.url("cost"), FAKE_TMUX_PANE_CMD="bash")
+        self.assertEqual(self.tmux_calls("send-keys"), [])
+        msgs = self.tmux_calls("display-message")
+        self.assertTrue(any("no longer running Claude" in " ".join(m) for m in msgs), msgs)
+
+    def test_send_verifies_the_clicked_pane(self):
+        self.run_handler(self.url("cost", pane="%42"))
+        probe = [c for c in self.tmux_calls("display") if "-p" in c]
+        self.assertEqual(probe, [["display", "-p", "-t", "%42", "#{pane_current_command}"]])
+
+    def test_do_send(self):
+        p = self.run_handler("do", "send", "%3", "effort", "xhigh")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.tmux_calls("send-keys"),
+                         [["send-keys", "-t", "%3", "-l", "/effort xhigh"],
+                          ["send-keys", "-t", "%3", "Enter"]])
+
+    def test_do_send_rejects_free_text(self):
+        for args in (("send", "%3", "effort", "turbo"), ("send", "%3", "model", "a b"),
+                     ("send", "%3", "model", "x;id"), ("send", "%3", "rm"),
+                     ("send", "3", "cost"), ("send", "%3", "cost", "extra"),
+                     ("exec", "%3", "cost")):
+            self.run_handler("do", *args)
+            self.assertEqual(self.tmux_calls("send-keys"), [], args)
+
+    def test_model_menu_defaults(self):
+        self.run_handler(self.url("model"))
+        client, title, items = self.menu()
+        self.assertEqual(client, "/dev/pts/3")  # newest client_activity
+        self.assertTrue(title.endswith("(types into the composer)"), title)
+        labels = [i[0] for i in items]
+        self.assertEqual(labels[:3], ["opus", "sonnet", "haiku"])
+        self.assertTrue(labels[-1].startswith("pick"))
+        self.assertIn("do send '%7' model opus", items[0][2])
+        self.assertIn("do send '%7' model", items[-1][2])
+        self.assertNotIn("pick", items[-1][2])
+
+    def test_model_menu_from_config_file(self):
+        marker = os.path.join(self.tmp, "pwned")
+        self.write_config(
+            "# comment\n\nRETRO_HUD_MODELS=fable, opus[1m] ,bad;item\n"
+            "PATH=/evil\nexport RETRO_HUD_USAGE_URL=x\n"
+            "RETRO_HUD_EVIL=$(touch {})\n$(touch {})\n".format(marker, marker))
+        self.run_handler(self.url("model"))
+        labels = [i[0] for i in self.menu()[2]]
+        self.assertEqual(labels[:2], ["fable", "opus[1m]"])
+        self.assertEqual(len(labels), 3)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_environment_overrides_config_file(self):
+        self.write_config("RETRO_HUD_MODELS=fable\n")
+        self.run_handler(self.url("model"), RETRO_HUD_MODELS="sonnet")
+        self.assertEqual(self.menu()[2][0][0], "sonnet")
+
+    def test_effort_menu_marks_current(self):
+        self.run_handler(self.url("effort", cur="high"))
+        _, title, items = self.menu()
+        self.assertIn("(types into the composer)", title)
+        self.assertEqual([i[0].split()[0] for i in items],
+                         ["low", "medium", "high", "xhigh", "max"])
+        self.assertIn("current", items[2][0])
+        self.assertEqual(sum("current" in i[0] for i in items), 1)
+        self.assertTrue(items[4][2].endswith("do send '%7' effort max\""), items[4][2])
+
+    def test_ctx_menu_and_clear_confirm(self):
+        self.run_handler(self.url("ctx"))
+        _, _, items = self.menu()
+        cmds = " ".join(i[2] for i in items)
+        self.assertIn("send '%7' compact", cmds)
+        self.assertIn("send '%7' context", cmds)
+        self.assertNotIn("send '%7' clear", cmds)      # behind the confirm menu
+        self.assertIn("confirm-clear '%7'", cmds)
+        os.remove(os.path.join(self.home, "tmux.log"))
+        self.run_handler("do", "confirm-clear", "%7")
+        _, title, items = self.menu()
+        self.assertIn("clear", title)
+        self.assertIn("send '%7' clear", " ".join(i[2] for i in items))
+        self.assertEqual(self.tmux_calls("send-keys"), [])
+
+    def test_menu_commands_reenter_handler_with_safe_tokens(self):
+        for action in ("model", "effort", "ctx"):
+            self.run_handler(self.url(action, cur="max"))
+        for argv in self.tmux_calls("display-menu"):
+            for cmd in argv[argv.index("-T") + 2:][2::3]:
+                if cmd:
+                    self.assertRegex(
+                        cmd, r"^run-shell -b \"'" + re.escape(HANDLER) +
+                        r"' do (-S '[^']*' )?(send|confirm-clear) '%7'( [A-Za-z0-9._:\[\]-]+)*\"$")
+
+    def test_diff_popup(self):
+        self.run_handler(self.url("diff"))
+        popups = self.tmux_calls("display-popup")
+        self.assertEqual(len(popups), 1)
+        argv = popups[0]
+        self.assertEqual(argv[argv.index("-d") + 1], self.work)
+        self.assertEqual(argv[argv.index("-c") + 1], "/dev/pts/3")
+        self.assertIn("-E", argv)
+        self.assertIn("git --no-pager diff --stat", argv[-1])
+        self.assertNotIn(self.work, argv[-1])  # cwd never reaches a shell string
+        self.assertEqual(self.tmux_calls("send-keys"), [])
+
+    def test_usage_opens_browser(self):
+        self.run_handler("retro-hud://usage")
+        self.assertEqual(self.log("xdg-open"), [["https://claude.ai/settings/usage"]])
+        self.write_config("RETRO_HUD_USAGE_URL=https://example.com/usage?a=1\n")
+        self.run_handler(self.url("usage"))
+        self.assertEqual(self.log("xdg-open")[-1], ["https://example.com/usage?a=1"])
+        self.assertEqual(self.tmux_calls("send-keys"), [])
+
+    def test_usage_rejects_non_web_url_from_config(self):
+        self.write_config("RETRO_HUD_USAGE_URL=file:///etc/passwd\n")
+        self.run_handler("retro-hud://usage")
+        self.assertEqual(self.log("xdg-open"), [["https://claude.ai/settings/usage"]])
+
+    def test_sock_addresses_that_server(self):
+        import socket
+        path = os.path.join(self.tmp, "s")
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(path)
+        try:
+            self.run_handler(self.url("model", sock=path))
+            raw = self.log("tmux")
+            self.assertTrue(raw)
+            for argv in raw:
+                self.assertEqual(argv[:2], ["-S", path])
+            self.assertIn("do -S '{}' send '%7' model".format(path),
+                          " ".join(self.menu()[2][0]))
+        finally:
+            s.close()
+
+    def test_no_tmux_server_is_logged_not_fatal(self):
+        p = self.run_handler(self.url("model"), FAKE_TMUX_NOSERVER="1")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertIn("client", self.handler_log())
+
+    def test_agent_is_accepted_but_reserved(self):
+        p = self.run_handler(self.url("agent"))
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(self.tmux_calls(), [])
+        self.assertNotIn("reject", self.handler_log())
+
+    def test_local_extension_runs_first(self):
+        d = os.path.join(self.home, ".claude")
+        os.makedirs(d)
+        with open(os.path.join(d, "retro-hud-handler.local.sh"), "w") as f:
+            f.write('[ "$1" = "retro-hud://cost?pane=%257" ] && '
+                    '{ echo "$1" > "$HOME/local.out"; exit 0; }\n')
+        self.run_handler("retro-hud://cost?pane=%257")
+        self.assertTrue(os.path.exists(os.path.join(self.home, "local.out")))
+        self.assertEqual(self.tmux_calls(), [])
+        self.run_handler(self.url("ctx"))       # not handled locally: built-in runs
+        self.assertEqual(len(self.tmux_calls("display-menu")), 1)
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")
