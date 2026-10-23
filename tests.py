@@ -720,7 +720,9 @@ class TestHandlerRejects(ShellHarness):
         for bad in ("retro-hud://rm", "retro-hud://cost;id", "http://example.com",
                     "retro-hud://cost?pane=%257;touch x", "retro-hud://cost?pane=$(id)",
                     "retro-hud://costs?pane=%257", "retro-hud://cost/x",
-                    "retro-hud://cost?pane=%257\n", "RETRO-HUD://cost"):
+                    "retro-hud://cost?pane=%257\n", "RETRO-HUD://cost",
+                    "retro-hud://agents?pane=%257", "retro-hud://agent?pane=x",
+                    "retro-hud://agent?pane=%257;id", "retro-hud://agent/wave?pane=%257"):
             self.assert_rejected(bad)
 
     def test_crafted_pane(self):
@@ -984,12 +986,6 @@ class TestHandlerActions(ShellHarness):
         self.assertEqual(p.returncode, 0, p.stderr.decode())
         self.assertIn("client", self.handler_log())
 
-    def test_agent_is_accepted_but_reserved(self):
-        p = self.run_handler(self.url("agent"))
-        self.assertEqual(p.returncode, 0)
-        self.assertEqual(self.tmux_calls(), [])
-        self.assertNotIn("reject", self.handler_log())
-
     def test_local_extension_runs_first(self):
         d = os.path.join(self.home, ".claude")
         os.makedirs(d)
@@ -1001,6 +997,276 @@ class TestHandlerActions(ShellHarness):
         self.assertEqual(self.tmux_calls(), [])
         self.run_handler(self.url("ctx"))       # not handled locally: built-in runs
         self.assertEqual(len(self.tmux_calls("display-menu")), 1)
+
+
+class TestHandlerAgent(ShellHarness):
+    """The `agent` action: a menu that talks to the HUD through its cache
+    files, found via the pane → session map the HUD writes."""
+    SID = "0d7e5c1a-session"
+
+    def setUp(self):
+        super().setUp()
+        self.cache = os.path.join(self.home, ".cache", "retro-hud")
+
+    def map_pane(self, pane="7", sid=None, cache=None):
+        cache = cache or self.cache
+        os.makedirs(cache, exist_ok=True)
+        with open(os.path.join(cache, "pane-{}.sid".format(pane)), "w") as f:
+            f.write(self.SID if sid is None else sid)
+
+    def state_path(self, cache=None):
+        return os.path.join(cache or self.cache, self.SID + ".state.json")
+
+    def put_state(self, obj, cache=None):
+        os.makedirs(cache or self.cache, exist_ok=True)
+        with open(self.state_path(cache), "w") as f:
+            json.dump(obj, f)
+
+    def get_state(self, cache=None):
+        with open(self.state_path(cache)) as f:
+            return json.load(f)
+
+    def messages(self):
+        return [m[-1] for m in self.tmux_calls("display-message")]
+
+    def test_url_shows_the_agent_menu(self):
+        self.map_pane()
+        p = self.run_handler(self.url("agent"))
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        client, title, items = self.menu()
+        self.assertEqual(client, "/dev/pts/3")
+        self.assertIn("agent", title)
+        self.assertEqual([i[0] for i in items], ["wave", "quiet 1h", "sprite ▸", "status"])
+        prefix = "run-shell -b \"'{}' do agent '%7' ".format(HANDLER)
+        self.assertEqual([i[2] for i in items],
+                         [prefix + sub + '"' for sub in ("wave", "quiet", "sprites", "status")])
+
+    def test_menu_title_names_the_agent_from_config(self):
+        self.map_pane()
+        self.write_config("RETRO_HUD_AGENT_NAME=Nova\n")
+        self.run_handler(self.url("agent"))
+        self.assertIn("Nova", self.menu()[1])
+
+    def test_hostile_agent_name_is_ignored(self):
+        self.map_pane()
+        self.run_handler(self.url("agent"), RETRO_HUD_AGENT_NAME="#(id)x")
+        title = self.menu()[1]
+        self.assertNotIn("#", title)
+        self.assertIn("agent", title)
+
+    def test_agent_url_needs_a_pane(self):
+        self.map_pane()
+        p = self.run_handler("retro-hud://agent")
+        self.assertEqual(p.returncode, 0)
+        self.assertEqual(self.tmux_calls(), [])
+        self.assertIn("reject", self.handler_log())
+
+    def test_agent_only_for_the_active_claude_pane(self):
+        self.map_pane("8")
+        self.run_handler(self.url("agent", pane="%8"))       # active pane is %7
+        self.map_pane()
+        self.run_handler(self.url("agent"), FAKE_TMUX_PANE_CMD="bash")
+        self.assertEqual(self.tmux_calls("display-menu"), [])
+        msgs = self.messages()
+        self.assertTrue(any("different pane" in m for m in msgs), msgs)
+        self.assertTrue(any("no longer running Claude" in m for m in msgs), msgs)
+
+    def test_no_session_map_means_no_menu(self):
+        self.run_handler(self.url("agent"))
+        self.assertEqual(self.tmux_calls("display-menu"), [])
+        self.assertTrue(any("no agent" in m for m in self.messages()), self.messages())
+
+    def test_hostile_session_map_is_refused(self):
+        for sid in ("../../etc/x", "a b", "", "x" * 200):
+            self.map_pane(sid=sid)
+            self.run_handler("do", "agent", "%7", "quiet")
+        self.assertEqual([n for n in os.listdir(self.cache) if not n.startswith(("pane-", "handler"))], [])
+
+    def test_do_wave_appends_a_10s_wave_event(self):
+        self.map_pane()
+        before = int(time.time())
+        p = self.run_handler("do", "agent", "%7", "wave")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        with open(os.path.join(self.cache, self.SID + ".events.jsonl")) as f:
+            lines = [json.loads(ln) for ln in f]
+        self.assertEqual(len(lines), 1)
+        ev = lines[0]
+        self.assertEqual((ev["text"], ev["ttl"]), ("wave", 10))
+        self.assertTrue(before <= ev["ts"] <= time.time() + 1, ev)
+        self.assertEqual(ev["text"], sl.WAVE_EVENT)  # what the HUD waves at
+
+    def test_do_quiet_sets_mute_until_and_keeps_every_other_key(self):
+        self.map_pane()
+        fixture = {"state": "working", "since": 123, "ctx_pct": 42, "limit_pct": 63,
+                   "cost": 3.21, "bubble": {"text": "ready", "until": 9}, "sprite": "cat",
+                   "custom": [1, 2]}
+        self.put_state(fixture)
+        before = int(time.time())
+        self.run_handler("do", "agent", "%7", "quiet")
+        got = self.get_state()
+        mute = got.pop("mute_until")
+        self.assertTrue(before + 3600 <= mute <= time.time() + 3601, mute)
+        self.assertEqual(got, fixture)
+        self.assertEqual([n for n in os.listdir(self.cache) if n.endswith(".tmp")], [])
+
+    def test_do_quiet_creates_a_missing_state_file(self):
+        self.map_pane()
+        self.run_handler("do", "agent", "%7", "quiet")
+        self.assertEqual(set(self.get_state()), {"mute_until"})
+
+    def test_corrupt_state_file_is_left_alone(self):
+        self.map_pane()
+        os.makedirs(self.cache, exist_ok=True)
+        with open(self.state_path(), "w") as f:
+            f.write("{not json")
+        self.run_handler("do", "agent", "%7", "sprite", "cat")
+        with open(self.state_path()) as f:
+            self.assertEqual(f.read(), "{not json")
+
+    def test_do_sprite_writes_and_default_removes(self):
+        self.map_pane()
+        self.put_state({"state": "yours", "since": 5})
+        for name in ("alien", "cat", "robot", "ghost"):
+            self.run_handler("do", "agent", "%7", "sprite", name)
+            self.assertEqual(self.get_state(), {"state": "yours", "since": 5, "sprite": name})
+        self.run_handler("do", "agent", "%7", "sprite", "default")
+        self.assertEqual(self.get_state(), {"state": "yours", "since": 5})
+
+    def test_do_sprite_rejects_unknown_names(self):
+        self.map_pane()
+        self.put_state({"state": "yours"})
+        for args in (("sprite", "dragon"), ("sprite",), ("sprite", "cat", "x"),
+                     ("sprite", "cat;id"), ("rm",), ("quiet", "now")):
+            self.run_handler("do", "agent", "%7", *args)
+            self.assertEqual(self.get_state(), {"state": "yours"}, args)
+        self.assertIn("reject", self.handler_log())
+
+    def test_sprite_submenu(self):
+        self.map_pane()
+        self.run_handler("do", "agent", "%7", "sprites")
+        _, title, items = self.menu()
+        self.assertIn("sprite", title)
+        self.assertEqual([i[0] for i in items], ["alien", "cat", "robot", "ghost", "default"])
+        prefix = "run-shell -b \"'{}' do agent '%7' sprite ".format(HANDLER)
+        self.assertEqual([i[2] for i in items],
+                         [prefix + n + '"' for n in ("alien", "cat", "robot", "ghost", "default")])
+
+    def test_do_status_composes_the_snapshot(self):
+        self.map_pane()
+        self.put_state({"state": "working", "since": int(time.time()) - 185,
+                        "ctx_pct": 42, "limit_pct": 63, "cost": 3.21})
+        self.run_handler("do", "agent", "%7", "status")
+        msg, = self.messages()
+        self.assertRegex(msg, r"working for 3m")
+        for part in ("ctx 42%", "limit 63%", "$3.21"):
+            self.assertIn(part, msg)
+        self.assertNotIn("#", msg)
+        self.assertEqual(self.tmux_calls("display-message")[0][:3],
+                         ["display-message", "-c", "/dev/pts/3"])
+
+    def test_do_status_without_snapshot(self):
+        self.map_pane()
+        self.run_handler("do", "agent", "%7", "status")
+        msg, = self.messages()
+        self.assertIn("no status", msg)
+
+    def test_do_status_ignores_hostile_values(self):
+        self.map_pane()
+        self.put_state({"state": "#(id)", "since": "x", "ctx_pct": "#{pane}",
+                        "limit_pct": None, "cost": [1]})
+        self.run_handler("do", "agent", "%7", "status")
+        msg, = self.messages()
+        self.assertNotIn("#", msg)
+        self.assertNotIn("id", msg)
+
+    def test_do_agent_checks_the_active_claude_pane(self):
+        self.map_pane("3")
+        self.put_state({"state": "yours"})
+        self.run_handler("do", "agent", "%3", "quiet")                  # active is %7
+        self.run_handler("do", "agent", "%3", "sprite", "cat",
+                         FAKE_TMUX_ACTIVE_PANE="%3", FAKE_TMUX_PANE_CMD="zsh")
+        self.assertEqual(self.get_state(), {"state": "yours"})
+
+    def test_cache_dir_from_environment_and_config(self):
+        other = os.path.join(self.tmp, "elsewhere")
+        self.map_pane(cache=other)
+        self.put_state({"state": "yours"}, cache=other)
+        self.run_handler("do", "agent", "%7", "sprite", "cat", RETRO_HUD_CACHE_DIR=other)
+        self.assertEqual(self.get_state(other)["sprite"], "cat")
+        self.write_config("RETRO_HUD_CACHE_DIR={}\n".format(other))
+        self.run_handler("do", "agent", "%7", "sprite", "ghost")
+        self.assertEqual(self.get_state(other)["sprite"], "ghost")
+        self.assertFalse(os.path.exists(self.state_path()))
+
+    def test_relative_cache_dir_is_refused(self):
+        self.map_pane()
+        self.put_state({"state": "yours"})
+        self.run_handler("do", "agent", "%7", "sprite", "cat", RETRO_HUD_CACHE_DIR="rel/dir")
+        self.assertEqual(self.get_state(), {"state": "yours"})
+
+
+class TestAgentEndToEnd(ShellHarness):
+    """HUD → pane map → handler → state/events files → HUD. The handler
+    stamps real time, so the HUD renders at real time too."""
+    SID = "e2e-session"
+    ENV = ("RETRO_HUD_ACTIONS", "TMUX_PANE", "TMUX", "RETRO_HUD_CACHE_DIR")
+
+    def setUp(self):
+        super().setUp()
+        self._saved = {k: os.environ.pop(k, None) for k in self.ENV}
+        self.cache = os.path.join(self.home, ".cache", "retro-hud")
+        os.environ["RETRO_HUD_CACHE_DIR"] = self.cache
+        os.environ["RETRO_HUD_ACTIONS"] = "1"
+        os.environ["TMUX_PANE"] = "%7"
+        self.t0 = int(time.time())
+        self.transcript = os.path.join(self.tmp, "t.jsonl")
+        with open(self.transcript, "w") as f:
+            f.write(json.dumps(user(self.t0 - 30)) + "\n")
+            f.write(json.dumps(asst(self.t0 - 2, "tool_use", ("tool_use",))) + "\n")
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        super().tearDown()
+
+    def row1(self, dt=0):
+        p = copy.deepcopy(MINIMAL)
+        p["transcript_path"] = self.transcript
+        p["session_id"] = self.SID
+        return sl.strip_ansi(sl.render(p, 160, self.t0 + dt)[0])
+
+    def has(self, plain, sprite_set, mood):
+        return any(f in plain for f in sl.SPRITES[sprite_set][mood])
+
+    def test_menu_actions_reach_the_hud(self):
+        self.row1()  # writes the state file and the pane map
+        self.run_handler(self.url("agent"))
+        self.assertEqual(len(self.tmux_calls("display-menu")), 1)
+
+        self.run_handler("do", "agent", "%7", "sprite", "ghost")
+        self.assertTrue(self.has(self.row1(1), "ghost", "working"))
+        self.run_handler("do", "agent", "%7", "sprite", "default")
+        self.assertTrue(self.has(self.row1(2), "alien", "working"))
+
+        with open(os.path.join(self.cache, self.SID + ".events.jsonl"), "a") as f:
+            f.write(json.dumps({"ts": self.t0, "text": "hello there", "ttl": 120}) + "\n")
+        self.assertIn("hello there", self.row1(3))
+        self.run_handler("do", "agent", "%7", "quiet")
+        self.assertNotIn("hello", self.row1(4))
+        with open(os.path.join(self.cache, self.SID + ".state.json")) as f:
+            self.assertGreaterEqual(json.load(f)["mute_until"], self.t0 + 3600)
+
+        self.run_handler("do", "agent", "%7", "wave")
+        plain = self.row1(int(time.time()) - self.t0 + 1)
+        self.assertTrue(self.has(plain, "alien", "yours"), plain)
+        self.assertNotIn("wave", plain)
+
+        self.run_handler("do", "agent", "%7", "status")
+        msg = self.tmux_calls("display-message")[-1][-1]
+        self.assertIn("working", msg)
+        self.assertIn("ctx 0%", msg)
 
 
 class TestHandlerInstall(ShellHarness):

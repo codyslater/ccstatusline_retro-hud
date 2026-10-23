@@ -16,12 +16,17 @@
 #
 #   retro-hud-handler.sh do [-S <sock>] send <pane> <command> [<arg>]
 #   retro-hud-handler.sh do [-S <sock>] confirm-clear <pane>
+#   retro-hud-handler.sh do [-S <sock>] agent <pane> wave|quiet|sprites|status
+#   retro-hud-handler.sh do [-S <sock>] agent <pane> sprite alien|cat|robot|ghost|default
 #
 # Settings come from the environment or, because a desktop-launched
 # handler never reads your shell rc files, from ~/.config/retro-hud/env:
 # plain KEY=VALUE lines, read line by line (never sourced). Keys:
 #   RETRO_HUD_MODELS      comma list for the model menu (opus,sonnet,haiku)
 #   RETRO_HUD_USAGE_URL   page the rate-limit gauges open
+#   RETRO_HUD_AGENT_NAME  title of the agent menu (default "agent")
+#   RETRO_HUD_CACHE_DIR   the HUD's presence cache, if you moved it
+#                         (default ~/.cache/retro-hud)
 #
 # Extension point: if ~/.claude/retro-hud-handler.local.sh exists it is
 # sourced first, with the same arguments; it may handle anything itself
@@ -57,13 +62,13 @@ if [ -f "$LOCAL_EXT" ]; then
 fi
 
 # ── settings: environment first, then the config file, then defaults ──
-cfg_models="" cfg_usage_url=""
+cfg_models="" cfg_usage_url="" cfg_agent_name="" cfg_cache_dir=""
 if [ -f "$CONFIG" ]; then
     n=0
     while IFS= read -r line || [ -n "$line" ]; do
         n=$((n + 1))
         [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
-        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL)=(.*)$ ]]; then
+        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL|RETRO_HUD_AGENT_NAME|RETRO_HUD_CACHE_DIR)=(.*)$ ]]; then
             key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
             if [[ $val =~ ^\"(.*)\"$ || $val =~ ^\'(.*)\'$ ]]; then
                 val=${BASH_REMATCH[1]}
@@ -71,6 +76,8 @@ if [ -f "$CONFIG" ]; then
             case $key in
                 RETRO_HUD_MODELS) cfg_models=$val ;;
                 RETRO_HUD_USAGE_URL) cfg_usage_url=$val ;;
+                RETRO_HUD_AGENT_NAME) cfg_agent_name=$val ;;
+                RETRO_HUD_CACHE_DIR) cfg_cache_dir=$val ;;
             esac
         else
             log "config: ignored line $n of $CONFIG"
@@ -184,6 +191,156 @@ send_slash() {  # pane, command, [arg]
         log "send-keys to $pane failed"
 }
 
+# ── agent helpers: BEGIN ──
+# The agent menu talks to the HUD through its presence cache, never to
+# Claude: the state file (<sid>.state.json, keys mute_until and sprite)
+# and the events channel (<sid>.events.jsonl). The HUD records which
+# session a pane shows in <cache>/pane-<N>.sid (pane %N) while click
+# actions are on, so the session is found from the pane, never the URL.
+SPRITE_SETS="alien cat robot ghost"
+QUIET_S=3600
+WAVE_TTL=10
+AGENT_NAME=${RETRO_HUD_AGENT_NAME:-$cfg_agent_name}
+if ! [[ $AGENT_NAME =~ ^[A-Za-z0-9][A-Za-z0-9\ ._-]{0,23}$ ]]; then
+    [ -z "$AGENT_NAME" ] || log "config: RETRO_HUD_AGENT_NAME must be letters, digits, space . _ - (max 24); ignored"
+    AGENT_NAME=agent
+fi
+
+# Same resolution as the HUD: RETRO_HUD_CACHE_DIR, else ~/.cache/retro-hud,
+# else (when that doesn't exist) the HUD's own /tmp/retro-hud-<uid>.
+presence_cache() {
+    local d=${RETRO_HUD_CACHE_DIR:-$cfg_cache_dir} t
+    if [ -z "$d" ]; then
+        d="$HOME/.cache/retro-hud"
+        t="/tmp/retro-hud-$(id -u)"
+        if [ ! -d "$d" ] && [ -d "$t" ] && [ -O "$t" ]; then d=$t; fi
+    fi
+    if [[ $d != /* || $d == *[[:cntrl:]]* ]]; then
+        log "agent: RETRO_HUD_CACHE_DIR must be an absolute path"
+        return 1
+    fi
+    printf '%s' "$d"
+}
+
+# Python does the JSON: an atomic read-modify-write that keeps every key
+# it doesn't own, and the status line from the snapshot. Arguments are
+# validated tokens; nothing from the files is ever run or echoed raw.
+STATE_PY='
+import json, math, os, sys, tempfile, time
+path, op, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+try:
+    with open(path) as f:
+        obj = json.loads(f.read(1 << 20))
+except FileNotFoundError:
+    obj = {}
+except (OSError, ValueError):
+    sys.exit("state file unreadable or not JSON; left alone")
+if not isinstance(obj, dict):
+    sys.exit("state file is not a JSON object; left alone")
+if op == "status":
+    def num(k):
+        v = obj.get(k)
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool)
+        return v if ok and math.isfinite(v) else None
+    label = {"working": "working", "yours": "your turn", "needs": "needs you",
+             "error": "error", "idle": "idle", "asleep": "asleep"}.get(obj.get("state"))
+    if label is None:
+        print(args[0] + ": no status yet")
+        sys.exit(0)
+    since = num("since")
+    if since is not None:
+        age = max(0, int(time.time() - since))
+        label += " for " + ("%ds" % age if age < 60 else "%dm" % (age // 60) if age < 3600
+                            else "%dh%02dm" % (age // 3600, age % 3600 // 60))
+    ctx, lim, cost = num("ctx_pct"), num("limit_pct"), num("cost")
+    print(" · ".join([args[0] + ": " + label,
+                      "ctx " + ("%d%%" % ctx if ctx is not None else "?"),
+                      "limit " + ("%d%%" % lim if lim is not None else "?"),
+                      "$%.2f" % cost if cost is not None else "$?"]))
+    sys.exit(0)
+if op == "mute":
+    obj["mute_until"] = int(time.time()) + int(args[0])
+elif op == "sprite" and args[0] == "default":
+    obj.pop("sprite", None)
+elif op == "sprite":
+    obj["sprite"] = args[0]
+else:
+    sys.exit("unknown op")
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
+                           prefix=os.path.basename(path) + ".", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+except BaseException:
+    os.unlink(tmp)
+    raise
+'
+
+state_py() {  # op, [arg]; stdout is the result, errors go to the log
+    local err=/dev/null
+    if mkdir -p "$LOG_DIR" 2>/dev/null && [ -w "$LOG_DIR" ]; then err="$LOG_DIR/handler.log"; fi
+    python3 -I -c "$STATE_PY" "$STATE_FILE" "$@" 2>>"$err"
+}
+
+# Resolve the clicked pane to its session: it must be the clicking
+# client's active pane, run claude, and have a session map from the HUD.
+agent_target() {
+    local pane=$1 current map sid=""
+    require_active_pane "$pane"
+    current=$(tm display -p -t "$pane" '#{pane_current_command}' 2>/dev/null) || current=""
+    if [ "$current" != "claude" ]; then
+        log "agent refused: pane $pane runs '${current:-?}', not claude"
+        tm display-message -c "$CLIENT" "retro-hud: that pane is no longer running Claude" || true
+        exit 0
+    fi
+    CACHE=$(presence_cache) || exit 0
+    map="$CACHE/pane-${pane#%}.sid"
+    [ ! -f "$map" ] || sid=$(head -c 256 "$map" 2>/dev/null) || sid=""
+    if ! [[ $sid =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
+        log "agent: no session mapped for pane $pane in $CACHE"
+        tm display-message -c "$CLIENT" \
+            "retro-hud: no agent presence for this pane yet (needs RETRO_HUD_ACTIONS=1 and a transcript)" || true
+        exit 0
+    fi
+    STATE_FILE="$CACHE/$sid.state.json"
+    EVENTS_FILE="$CACHE/$sid.events.jsonl"
+}
+
+agent_menu() {
+    local pane=$1
+    show_menu "$AGENT_NAME" \
+        "wave" w "$(menu_cmd agent "$pane" wave)" \
+        "quiet 1h" q "$(menu_cmd agent "$pane" quiet)" \
+        "sprite ▸" s "$(menu_cmd agent "$pane" sprites)" \
+        "status" i "$(menu_cmd agent "$pane" status)"
+}
+
+agent_do() {  # pane, subcommand, [arg] (validated by the caller)
+    local pane=$1 sub=$2 msg items=() n i=0
+    agent_target "$pane"
+    case $sub in
+        wave)
+            printf '{"ts":%s,"text":"wave","ttl":%s}\n' "$(date +%s)" "$WAVE_TTL" \
+                >>"$EVENTS_FILE" 2>/dev/null || log "agent: cannot append to the events file"
+            ;;
+        quiet) state_py mute "$QUIET_S" || log "agent: quiet failed" ;;
+        sprite) state_py sprite "$3" || log "agent: sprite failed" ;;
+        sprites)
+            for n in $SPRITE_SETS default; do
+                i=$((i + 1))
+                items+=("$n" "$i" "$(menu_cmd agent "$pane" sprite "$n")")
+            done
+            show_menu "$AGENT_NAME: sprite" "${items[@]}"
+            ;;
+        status)
+            msg=$(state_py status "$AGENT_NAME") || msg="$AGENT_NAME: status unavailable"
+            tm display-message -c "$CLIENT" "${msg//#/}" || true
+            ;;
+    esac
+}
+# ── agent helpers: END ──
+
 # ── internal form, used by menu items ──
 if [ "${1-}" = "do" ]; then
     shift
@@ -205,6 +362,15 @@ if [ "${1-}" = "do" ]; then
             show_menu "really /clear this session? $NOTE" \
                 "no, keep it" n "" \
                 "yes, /clear" y "$(menu_cmd send "$pane" clear)"
+            ;;
+        agent)
+            case "${1-}:$#" in
+                wave:1 | quiet:1 | sprites:1 | status:1) ;;
+                sprite:2) [[ " $SPRITE_SETS default " == *" $2 "* && $2 =~ ^[a-z]+$ ]] ||
+                    reject "do agent sprite: $(printf '%q' "$2")" ;;
+                *) reject "do agent: $(printf '%q ' "$@")" ;;
+            esac
+            agent_do "$pane" "$@"
             ;;
         *) reject "do: unknown verb $(printf '%q' "$verb")" ;;
     esac
@@ -243,7 +409,7 @@ for pair in "${pairs[@]}"; do
     esac
 done
 
-case $ACTION in usage | agent) need_pane=0 ;; *) need_pane=1 ;; esac
+case $ACTION in usage) need_pane=0 ;; *) need_pane=1 ;; esac
 if [ "$need_pane" = 1 ] || [ -n "$PANE" ]; then
     [[ $PANE =~ ^%[0-9]+$ ]] || reject "$ACTION: bad pane $(printf '%q' "$PANE")"
 fi
@@ -256,7 +422,7 @@ fi
 
 case $ACTION in
     model | effort | ctx | diff) require_active_pane "$PANE" ;;
-    *) ;;  # cost checks in send_slash; usage and agent target no pane
+    *) ;;  # cost checks in send_slash, agent in agent_target; usage targets no pane
 esac
 
 case $ACTION in
@@ -311,9 +477,10 @@ case $ACTION in
             "{ $git_safe --stat --color=always; echo; $git_safe --color=always; } 2>&1 | LESSSECURE=1 less -R" ||
             log "display-popup failed"
         ;;
-    # ── agent action: BEGIN (reserved; its menu arrives in a later release) ──
+    # ── agent action: BEGIN ──
     agent)
-        log "agent: reserved for a later release"
+        agent_target "$PANE"
+        agent_menu "$PANE"
         ;;
     # ── agent action: END ──
 esac
