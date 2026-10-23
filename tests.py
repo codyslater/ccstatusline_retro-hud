@@ -2673,6 +2673,20 @@ def _filled(cv):
     return {(r, c) for r in range(4) for c in range(13) if cv[r][c]}
 
 
+class QuietBody:
+    """Mood poses in isolation: no blink, hop or breath this tick (the
+    alive flags have their own tests)."""
+
+    def setUp(self):
+        super().setUp()
+        self._flags = sl.alive_flags
+        sl.alive_flags = lambda seed, tick: {"blink": False, "hop": False, "breathe": False}
+
+    def tearDown(self):
+        sl.alive_flags = self._flags
+        super().tearDown()
+
+
 class TestCreatureRender(unittest.TestCase):
     """Every pose fits the fixed 13-cell box on both lines."""
 
@@ -2681,7 +2695,7 @@ class TestCreatureRender(unittest.TestCase):
             for seed in range(0, 40, 3):
                 for mood in MOODS_ALL:
                     for el in (None, 0, 3, 7, 12, 17, 25, 40, 4000):
-                        for now in (NOW, NOW + 10):
+                        for now in range(NOW, NOW + 6):
                             for icon in ("", "!", "\U0001F6A9"):
                                 since = None if el is None else now - el
                                 p = sl.pose(seed, mood, since, now, 60, fam, icon=icon)
@@ -2703,7 +2717,12 @@ class TestCreatureRender(unittest.TestCase):
             sl._EMOJI_W = saved
 
     def test_half_blocks_carry_two_pixels(self):
-        p = sl.pose(0, "calm", None, NOW, 60, "alien", color=46)
+        flags, sl.alive_flags = sl.alive_flags, lambda s, t: {"blink": False, "hop": False,
+                                                              "breathe": False}
+        try:
+            p = sl.pose(0, "calm", None, NOW, 60, "alien", color=46)
+        finally:
+            sl.alive_flags = flags
         head, rule = sl.render_box(p)
         cv = p["canvas"]
         for line, (top, bot) in ((head, (0, 1)), (rule, (2, 3))):
@@ -2717,7 +2736,9 @@ class TestCreatureRender(unittest.TestCase):
 
     def test_steady_calm_canvas_is_the_grid(self):
         g = sl.creature_grid(5, "beast")
-        cv = sl.pose(5, "calm", None, NOW, 60, "beast")["canvas"]
+        quiet = next(t for t in range(NOW, NOW + 999)
+                     if not any(sl.alive_flags(5, t).values()))
+        cv = sl.pose(5, "calm", None, quiet, 60, "beast")["canvas"]
         for r in range(4):
             self.assertEqual([cv[r][c] for c in (0, 1, 11, 12)], [None] * 4)
             for c in range(9):
@@ -2725,12 +2746,12 @@ class TestCreatureRender(unittest.TestCase):
                 self.assertEqual(cv[r][c + 2] == "e", g[r][c] == "eye")
 
 
-class TestCreaturePoses(unittest.TestCase):
+class TestCreaturePoses(QuietBody, unittest.TestCase):
     def cv(self, mood, since=None, now=NOW, seed=4, fam="alien", **kw):
         return sl.pose(seed, mood, since, now, 60, fam, **kw)["canvas"]
 
     def test_working_walks_its_legs(self):
-        a, b = self.cv("working", now=NOW), self.cv("working", now=NOW + 10)
+        a, b = self.cv("working", now=NOW), self.cv("working", now=NOW + 1)
         self.assertEqual(a[:3], b[:3])
         self.assertNotEqual(a[3], b[3])
 
@@ -2744,7 +2765,7 @@ class TestCreaturePoses(unittest.TestCase):
             self.assertTrue(any(self.cv("yours", since=NOW - el)[3]), el)
 
     def test_needs_bounces_with_a_yellow_question_mark(self):
-        even, odd = self.cv("needs", now=NOW), self.cv("needs", now=NOW + 10)
+        even, odd = self.cv("needs", now=NOW), self.cv("needs", now=NOW + 1)
         self.assertTrue(any(even[3]))
         self.assertFalse(any(odd[3]))
         head, _ = sl.render_box(sl.pose(4, "needs", None, NOW, 60))
@@ -2753,9 +2774,10 @@ class TestCreaturePoses(unittest.TestCase):
 
     def test_idle_squashes_and_blinks(self):
         self.assertFalse(any(self.cv("idle")[0]))
-        eyes = [sum(row.count("e") for row in self.cv("idle", now=t)) for t in (NOW, NOW + 10)]
-        self.assertEqual(sorted(eyes), [0, 2])
-        head, _ = sl.render_box(sl.pose(4, "idle", None, NOW if eyes[0] else NOW + 10, 60))
+        # slow blinks: shut two ticks in six
+        eyes = [sum(row.count("e") for row in self.cv("idle", now=NOW + i)) for i in range(6)]
+        self.assertEqual(sorted(eyes), [0, 0, 2, 2, 2, 2])
+        head, _ = sl.render_box(sl.pose(4, "idle", None, NOW + eyes.index(2), 60))
         self.assertTrue(_has_color(head, 244))
 
     def test_asleep_melts_and_empties_the_head_line(self):
@@ -2774,7 +2796,7 @@ class TestCreaturePoses(unittest.TestCase):
         self.assertGreater(width(melt[3]), width(calm[3]))
 
     def test_error_shakes_with_x_eyes(self):
-        a, b = self.cv("error", now=NOW), self.cv("error", now=NOW + 10)
+        a, b = self.cv("error", now=NOW), self.cv("error", now=NOW + 1)
         self.assertNotEqual(a, b)
         self.assertIn(b, ([[None, None] + r[:-2] for r in a], [r[2:] + [None, None] for r in a]))
         head, _ = sl.render_box(sl.pose(4, "error", None, NOW, 60, color=46))
@@ -2824,48 +2846,130 @@ class TestCreaturePoses(unittest.TestCase):
             self.assertEqual(self.cv(mood, since=None), steady, mood)
         # a different tick rolls a different scatter, the same tick never re-rolls
         self.assertNotEqual(self.cv("calm", since=NOW - 1, now=NOW),
-                            self.cv("calm", since=NOW + 9, now=NOW + 10))
+                            self.cv("calm", since=NOW, now=NOW + 1))
+
+
+def _tick_with(seed, **want):
+    """The first tick from NOW whose alive flags match `want` (the rest off)."""
+    for t in range(NOW, NOW + 5000):
+        f = sl.alive_flags(seed, t)
+        if all(f[k] == want.get(k, False) for k in f):
+            return t
+    raise AssertionError("no tick with {}".format(want))
+
+
+def _width(cv):
+    cols = [c for row in cv for c, v in enumerate(row) if v]
+    return max(cols) - min(cols) + 1
+
+
+class TestAliveFlags(unittest.TestCase):
+    def test_rates_and_determinism(self):
+        n = 7000
+        flags = [sl.alive_flags(9, NOW + i) for i in range(n)]
+        self.assertEqual(flags, [sl.alive_flags(9, NOW + i) for i in range(n)])
+        blink = sum(f["blink"] for f in flags) / n
+        hop = sum(f["hop"] for f in flags) / n
+        self.assertAlmostEqual(blink, 1 / 7, delta=0.03)
+        self.assertAlmostEqual(hop, 1 / 12, delta=0.03)
+        self.assertEqual([f["breathe"] for f in flags[:8]],
+                         [(NOW + i) % 4 == 0 for i in range(8)])
+        # two seeds blink at different moments
+        self.assertNotEqual([f["blink"] for f in flags[:200]],
+                            [sl.alive_flags(10, NOW + i)["blink"] for i in range(200)])
+
+
+class TestBigAlive(unittest.TestCase):
+    """Blink, hop and breath on the half-block creature."""
+
+    def cv(self, mood, t, seed=4):
+        return sl.pose(seed, mood, None, t, 60, "alien")["canvas"]
+
+    def test_blink_closes_the_eyes_for_one_tick(self):
+        t = _tick_with(4, blink=True)
+        self.assertEqual(sum(row.count("e") for row in self.cv("calm", t)), 0)
+        self.assertEqual(sum(row.count("e") for row in self.cv("calm", _tick_with(4))), 2)
+        # asleep has no eyes to blink; error keeps its x eyes
+        self.assertEqual(sum(row.count("x") for row in self.cv("error", t)), 2)
+
+    def test_hop_only_while_calm_or_working(self):
+        t = _tick_with(4, hop=True)
+        for mood in ("calm", "working"):
+            self.assertFalse(any(self.cv(mood, t)[3]), mood)
+        for mood in ("idle", "error", "agitated"):
+            self.assertTrue(any(self.cv(mood, t)[3]), mood)
+
+    def test_breathe_is_one_pixel_wider(self):
+        t = _tick_with(4, breathe=True)
+        q = _tick_with(4)
+        self.assertEqual(_width(self.cv("calm", t)), _width(self.cv("calm", q)) + 1)
 
 
 class TestCreatureMovement(unittest.TestCase):
-    def pos(self, mood, since, now, cols=60):
-        return sl.pose(1, mood, since, now, cols)["pos"]
+    """Wander: ease toward a seeded target, rest, pick another; one frame
+    per RETRO_HUD_TICK_S (default 1 s)."""
 
-    def test_moving_moods_patrol_inside_the_rule(self):
+    def pos(self, mood, since, now, cols=60, seed=1, tick_len=1):
+        return sl.pose(seed, mood, since, now, cols, tick_len=tick_len)["pos"]
+
+    def test_moving_moods_wander_inside_the_rule(self):
         for mood, speed in (("calm", 1), ("agitated", 2), ("working", 3)):
-            spots = [self.pos(mood, None, NOW + 10 * i) for i in range(200)]
-            self.assertGreaterEqual(max(spots), 60 - 13 - 1)
-            self.assertLessEqual(max(spots), 60 - 13)
-            self.assertEqual(min(spots), 0)
-            steps = {abs(a - b) for a, b in zip(spots, spots[1:])}
-            self.assertEqual(max(steps), speed, mood)
+            for seed in (1, 2, 77):
+                spots = [self.pos(mood, None, NOW + i, seed=seed) for i in range(700)]
+                self.assertGreaterEqual(min(spots), 0)
+                self.assertLessEqual(max(spots), 60 - 13)
+                self.assertGreater(max(spots) - min(spots), 15, (mood, seed))
+                steps = [abs(a - b) for a, b in zip(spots, spots[1:])]
+                self.assertEqual(max(steps), speed, (mood, seed))  # continuous, no jumps
+                # it rests: at least one run of 3 equal positions
+                self.assertTrue(any(a == b == c for a, b, c in
+                                    zip(spots, spots[1:], spots[2:])), (mood, seed))
+
+    def test_wander_is_continuous_across_stretches(self):
+        for span in (1, 5, 47, 200):
+            for speed in (1, 2, 4):
+                length = sl.WANDER_REST + span
+                for k in (0, 1, 7, 12345):
+                    t = k * length
+                    a = sl._wander(3, t - 1, span, speed)[0]
+                    b = sl._wander(3, t, span, speed)[0]
+                    self.assertLessEqual(abs(a - b), speed, (span, speed, k))
+                    for i in (0, 1, length // 2, length - 1):
+                        self.assertTrue(0 <= sl._wander(3, t + i, span, speed)[0] <= span)
+        self.assertEqual(sl._wander(3, NOW, 0, 1), (0, True))
+
+    def test_tick_s_samples_the_same_walk(self):
+        # at 5 s a frame the creature takes the walk's steps once per 5 s
+        for i in range(40):
+            self.assertEqual(self.pos("calm", None, NOW * 5 + 5 * i + 3, tick_len=5),
+                             self.pos("calm", None, NOW + i))
 
     def mid_rule(self):
-        # a moment when a calm cruise stands well away from the left end
-        return next(NOW + 10 * j for j in range(100) if self.pos("calm", None, NOW + 10 * j) >= 10)
+        # a moment when a calm wander stands well away from the left end
+        return next(NOW + j for j in range(2000) if self.pos("calm", None, NOW + j) >= 10)
 
     def test_parked_moods_walk_left_and_stop(self):
         for mood in ("needs", "idle", "asleep", "error"):
             since = self.mid_rule()
-            walk = [self.pos(mood, since, since + 10 * i) for i in range(60)]
+            walk = [self.pos(mood, since, since + i) for i in range(80)]
             self.assertGreater(walk[0], 0, mood)
             self.assertEqual(walk, sorted(walk, reverse=True), mood)
             self.assertTrue(all(a - b <= 1 for a, b in zip(walk, walk[1:])), mood)
             self.assertEqual(walk[-1], 0, mood)
             self.assertEqual(self.pos(mood, None, NOW), 0, mood)
 
-    def test_yours_parks_30s_then_cruises(self):
+    def test_yours_parks_30s_then_wanders(self):
         since = self.mid_rule()
-        first = [self.pos("yours", since, since + d) for d in (0, 10, 20)]
+        first = [self.pos("yours", since, since + d) for d in range(30)]
         self.assertEqual(first, sorted(first, reverse=True))
-        later = {self.pos("yours", since, since + d) for d in (40, 50, 60, 70)}
+        later = {self.pos("yours", since, since + d) for d in range(40, 200)}
         self.assertGreater(len(later), 1)
 
     def test_red_holds_while_spinning_then_runs_at_4(self):
         since = self.mid_rule()
-        spin = {self.pos("red", since, since + d) for d in (0, 5, 10, 15, 19)}
+        spin = {self.pos("red", since, since + d) for d in range(20)}
         self.assertEqual(len(spin), 1)
-        run = [self.pos("red", since, since + 20 + 10 * i) for i in range(30)]
+        run = [self.pos("red", since, since + 20 + i) for i in range(400)]
         self.assertEqual(max(abs(a - b) for a, b in zip(run, run[1:])), 4)
 
     def test_short_span_does_not_crash(self):
@@ -3129,12 +3233,12 @@ class TestCreatureHud(CreatureCase):
     def test_wave_event_raises_the_arms(self):
         self.tx(asst(NOW - 2, "tool_use"))
         self.events({"ts": NOW, "text": "wave", "ttl": 30})
-        steady = sl.pose(3, "yours", None, NOW, 60)["canvas"]
         for el in (1, 4, 7):
             pres = sl.presence(self.payload(), NOW + el, 0, 0, 0, 0, creature=True)
             self.assertEqual(pres["mood"], "yours")
             # a gesture is not a mood change: clean arms up, no scatter, no jump
             cv = sl.pose(3, "yours", pres["mood_since"], NOW + el, 60)["canvas"]
+            steady = sl.pose(3, "yours", None, NOW + el, 60)["canvas"]
             self.assertEqual(cv, steady, el)
         self.assertEqual(self.state_file()["mood"], "working")  # the gesture is not stored
 
