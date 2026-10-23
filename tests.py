@@ -301,7 +301,16 @@ class TestWidthKnobs(unittest.TestCase):
     def test_default_margin(self):
         out = self.run_script({}).stdout.decode()
         widths = [sl.vislen(line) for line in out.splitlines()]
-        self.assertEqual(max(widths), 117)  # 120 − default margin 3
+        self.assertEqual(max(widths), 116)  # 120 − default margin 4
+
+    def test_default_fits_claude_code_prompt_footer(self):
+        # Claude Code's prompt footer pads its row by 2 columns on each side
+        # (inline mode), so the status line box is COLUMNS − 4 wide. Any row
+        # wider than that is cut by Ink's truncate and the frame's right
+        # edge ("─┐" / "─┘") turns into "…".
+        out = self.run_script({"RETRO_HUD_HOME_URL": ""}).stdout.decode()
+        for line in out.splitlines():
+            self.assertLessEqual(sl.vislen(line), 120 - 2 * 2, sl.strip_ansi(line))
 
     def test_margin_and_width_overrides(self):
         out = self.run_script({"RETRO_HUD_MARGIN": "5"}).stdout.decode()

@@ -15,6 +15,22 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   characters in the URL are stripped so it cannot break out of the link.
   Unset or empty, the output is byte-identical to v2.6.0.
 
+### Fixed
+- The right edge of the frame (`─┐` / `─┘`) could be replaced by `…`.
+  Claude Code draws the status line inside its prompt footer, which pads
+  2 columns on each side, so the box is `COLUMNS − 4` wide; rows rendered
+  at `COLUMNS − 3` overflowed it by one cell and were cut. The default
+  `RETRO_HUD_MARGIN` is now `4`. Glyph widths were ruled out: Claude
+  Code measures rows with the same widths the HUD uses.
+
+### Notes
+- Claude Code does not re-run the status line on a terminal resize; the
+  previous output stays on screen until the next `refreshInterval` tick,
+  so a `…` (after narrowing) or a short frame (after widening) can show
+  for a few seconds. The troubleshooting guide now documents this and its
+  mitigations (a shorter `refreshInterval`, a larger margin).
+- If you set `statusLine.padding`, add twice that value to the margin.
+
 ## [v2.6.0] — 2026-09-15
 
 ### Changed

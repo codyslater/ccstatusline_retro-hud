@@ -97,6 +97,12 @@ patrols, and the frame re-fits within seconds of a terminal resize. See
 **[docs/configuration.md](docs/configuration.md)** for the full knob table,
 manual install, and the width troubleshooting guide (WSL2, VS Code).
 
+Right after a terminal resize the right edge of the frame can show a `…`
+(or stop short) for a few seconds: Claude Code keeps the last status line
+on screen until the next `refreshInterval` tick, so lower the interval
+(e.g. `2`) to shorten that window, or raise `RETRO_HUD_MARGIN` to absorb
+small narrowings.
+
 ## Development
 
 ```bash

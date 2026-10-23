@@ -21,7 +21,7 @@ Env toggles:
     RETRO_HUD_ALIEN=0            ground the alien that patrols the top rule
     RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
                                  always, or never
-    RETRO_HUD_MARGIN=3           columns kept free at the right edge (raise if
+    RETRO_HUD_MARGIN=4           columns kept free at the right edge (raise if
                                  your terminal truncates lines with an ellipsis)
     RETRO_HUD_WIDTH=<cols>       hard width override when $COLUMNS lies
     RETRO_HUD_EMOJI=2            2: emoji are two cells (normal); 1: count them
@@ -683,11 +683,12 @@ def main(argv):
 
     cols = num(os.environ.get("RETRO_HUD_WIDTH")) or \
         shutil.get_terminal_size((100, 24)).columns
-    # Claude Code's renderer truncates over-wide lines with an ellipsis
-    # at an undocumented threshold (see anthropics/claude-code#36417);
-    # community guidance is to stay well under COLUMNS-3. Tune with
-    # RETRO_HUD_MARGIN if your terminal still clips or leaves a gap.
-    cols = max(cols - num(os.environ.get("RETRO_HUD_MARGIN"), 3), 20)
+    # Claude Code draws the status line inside its prompt footer, which
+    # pads 2 columns on each side (inline mode, as of Claude Code 2.1.309),
+    # plus 2 × statusLine.padding if set. A row wider than that box is cut
+    # with an ellipsis (see anthropics/claude-code#36417), so the default
+    # margin is 4. Tune with RETRO_HUD_MARGIN if it still clips or gaps.
+    cols = max(cols - num(os.environ.get("RETRO_HUD_MARGIN"), 4), 20)
     try:
         rows = render(data, cols, now)
     except Exception:  # never break the statusline — degrade gracefully
