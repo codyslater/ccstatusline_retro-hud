@@ -1469,8 +1469,32 @@ def creature_look(data, pres):
             "color": creature_color(seed, os.environ.get("RETRO_HUD_CREATURE_COLOR", ""))}
 
 
-def creature_on():
-    return os.environ.get("RETRO_HUD_CREATURE", "1") != "0"
+SIZES = ("tiny", "big", "tall")
+
+
+def creature_size(data=None):
+    """"tiny" (the default), "big", "tall" or "off". RETRO_HUD_CREATURE=0
+    is off whatever else says; otherwise the state file's `size` (set from
+    the click menu) wins over the environment."""
+    env = os.environ.get("RETRO_HUD_CREATURE", "").strip().lower()
+    if env == "0":
+        return "off"
+    size = env if env in SIZES else "tiny"
+    sid = data.get("session_id") if isinstance(data, dict) else None
+    if isinstance(sid, str) and _SID_RE.fullmatch(sid):
+        d = cache_dir(create=False)
+        if d:
+            st = _read_json(os.path.join(d, sid + ".state.json")).get("size")
+            if st in SIZES:
+                size = st
+    return size
+
+
+def tick_s():
+    """Seconds per animation frame: RETRO_HUD_TICK_S, a positive integer
+    (default 1). The frame index is now // tick_s()."""
+    v = os.environ.get("RETRO_HUD_TICK_S", "").strip()
+    return int(v) if v.isdigit() and int(v) > 0 else 1
 
 
 def render(data, cols, now):
@@ -1478,7 +1502,8 @@ def render(data, cols, now):
     with the pixel creature (RETRO_HUD_CREATURE, on by default)."""
     global _EMOJI_W
     frame_on = os.environ.get("RETRO_HUD_FRAME", "1") != "0"
-    creature = creature_on()
+    size = creature_size(data)
+    creature = size != "off"
     cd_pct = num(os.environ.get("RETRO_HUD_COUNTDOWN_PCT"), WARN_PCT)
     emoji_mode = os.environ.get("RETRO_HUD_EMOJI", "2")
     _EMOJI_W = 1 if emoji_mode == "1" else 2
@@ -1750,13 +1775,15 @@ def render(data, cols, now):
         except Exception:  # presence is decoration: never cost the bar
             pres = None
 
-    if creature:
+    if size == "tall":
         try:
             head, top = _frame_creature(row1, cols, frame_on, alien_pct, now, pres,
                                         creature_look(data, pres), action)
         except Exception:  # decoration again: a blank head line, a plain rule
             head, top = R, _frame(row1, cols, "┐", frame_on)
         return [head, top, _frame(row2, cols, "┘", frame_on)]
+    if creature:  # tiny and big: built in the next steps
+        return [_frame(row1, cols, "┐", frame_on), _frame(row2, cols, "┘", frame_on)]
     return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres, action),
             _frame(row2, cols, "┘", frame_on)]
 
@@ -1820,7 +1847,11 @@ def main(argv):
         model = dig(data, "model", "display_name") or "retro-hud"
         rows = ["{}┌─{}[ {}{}{} ]{}".format(NEON_GREEN, R, MODEL_TXT, model, R + MODEL_BOX, R),
                 "{}└─{} {}(status degraded){}".format(NEON_GREEN, R, DIM, R)]
-        if creature_on():
+        try:
+            tall = creature_size(data) == "tall"
+        except Exception:
+            tall = False
+        if tall:
             rows.insert(0, R)  # three lines whatever happens: nothing jumps
     print("\n".join(rows), end="")
     return 0

@@ -15,7 +15,8 @@ import unittest
 # CLI tests inherit os.environ), and nothing may touch the real cache dir.
 for _k in ("RETRO_HUD_PRESENCE", "RETRO_HUD_SPRITE", "RETRO_HUD_AGENT_NAME",
            "RETRO_HUD_QUIPS", "RETRO_HUD_IDLE_MIN", "RETRO_HUD_SLEEP_MIN",
-           "RETRO_HUD_ALIEN", "RETRO_HUD_CREATURE_SEED", "RETRO_HUD_CREATURE_COLOR"):
+           "RETRO_HUD_ALIEN", "RETRO_HUD_CREATURE_SEED", "RETRO_HUD_CREATURE_COLOR",
+           "RETRO_HUD_TICK_S"):
     os.environ.pop(_k, None)
 # The 2.x suite pins the two-row HUD: RETRO_HUD_CREATURE=0 must stay
 # byte-identical to it. Creature tests switch it on (CreatureCase).
@@ -1393,7 +1394,7 @@ class TestAgentEndToEnd(ShellHarness):
 
 
     def test_reroll_reaches_the_creature(self):
-        os.environ["RETRO_HUD_CREATURE"] = "1"
+        os.environ["RETRO_HUD_CREATURE"] = "tall"
         try:
             p = copy.deepcopy(MINIMAL)
             p["transcript_path"] = self.transcript
@@ -2823,11 +2824,12 @@ class CreatureCase(PresenceCase):
 
     def setUp(self):
         super().setUp()
-        os.environ["RETRO_HUD_CREATURE"] = "1"
+        os.environ["RETRO_HUD_CREATURE"] = "tall"
 
     def tearDown(self):
         os.environ["RETRO_HUD_CREATURE"] = "0"
-        for k in ("RETRO_HUD_CREATURE_SEED", "RETRO_HUD_CREATURE_COLOR", "RETRO_HUD_FRAME"):
+        for k in ("RETRO_HUD_CREATURE_SEED", "RETRO_HUD_CREATURE_COLOR", "RETRO_HUD_FRAME",
+                  "RETRO_HUD_TICK_S"):
             os.environ.pop(k, None)
         super().tearDown()
 
@@ -2937,7 +2939,7 @@ class TestCreatureHud(CreatureCase):
                     on = sl.render(self.payload(FULL), cols, t)
                     os.environ["RETRO_HUD_CREATURE"] = "0"
                     off = sl.render(self.payload(FULL), cols, t)
-                    os.environ["RETRO_HUD_CREATURE"] = "1"
+                    os.environ["RETRO_HUD_CREATURE"] = "tall"
                     self.assertEqual(on[2], off[1], (alien, cols))
                     if alien == "0":
                         self.assertEqual(on[1:], off, cols)
@@ -3072,6 +3074,82 @@ class TestCreatureHud(CreatureCase):
         self.assertEqual(self.state_file()["mood"], "working")  # the gesture is not stored
 
 
+class TestCreatureSize(PresenceCase):
+    """RETRO_HUD_CREATURE picks tiny (default), big, tall or 0; the state
+    file's `size` overrides it unless the creature is off."""
+
+    def tearDown(self):
+        os.environ["RETRO_HUD_CREATURE"] = "0"
+        os.environ.pop("RETRO_HUD_TICK_S", None)
+        super().tearDown()
+
+    def size(self, env, **state):
+        if env is None:
+            os.environ.pop("RETRO_HUD_CREATURE", None)
+        else:
+            os.environ["RETRO_HUD_CREATURE"] = env
+        if state:
+            self.put_state(**state)
+        return sl.creature_size(self.payload())
+
+    def test_env_values(self):
+        for env, want in ((None, "tiny"), ("", "tiny"), ("1", "tiny"), ("tiny", "tiny"),
+                          ("big", "big"), ("tall", "tall"), ("BIG", "big"), ("0", "off"),
+                          ("huge", "tiny")):
+            self.assertEqual(self.size(env), want, env)
+
+    def test_state_file_size_overrides_but_never_turns_it_on(self):
+        self.assertEqual(self.size("tiny", size="big"), "big")
+        self.assertEqual(self.size("big", size="tall"), "tall")
+        self.assertEqual(self.size("tall", size="tiny"), "tiny")
+        self.assertEqual(self.size("tiny", size="huge"), "tiny")   # junk: ignored
+        self.assertEqual(self.size("big", size=3), "big")
+        self.assertEqual(self.size("0", size="big"), "off")         # off is off
+        os.environ["RETRO_HUD_CREATURE"] = "big"
+        self.assertEqual(sl.creature_size({}), "big")               # no session: env only
+
+    def test_tick_s(self):
+        for env, want in ((None, 1), ("5", 5), ("1", 1), ("0", 1), ("-3", 1), ("x", 1),
+                          ("1.5", 1), ("", 1), (" 2 ", 2)):
+            if env is None:
+                os.environ.pop("RETRO_HUD_TICK_S", None)
+            else:
+                os.environ["RETRO_HUD_TICK_S"] = env
+            self.assertEqual(sl.tick_s(), want, env)
+
+    def test_line_counts_per_size(self):
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        for env, n in (("tiny", 2), ("big", 2), ("tall", 3), ("0", 2), (None, 2)):
+            if env is None:
+                os.environ.pop("RETRO_HUD_CREATURE", None)
+            else:
+                os.environ["RETRO_HUD_CREATURE"] = env
+            for payload in (FULL, MINIMAL, OVERLOAD, {}):
+                for cols in range(50, 241, 30):
+                    rows = sl.render(self.payload(payload), cols, NOW)
+                    self.assertEqual(len(rows), n, (env, cols))
+                    for row in rows:
+                        self.assertLessEqual(sl.vislen(row), cols, (env, cols))
+        os.environ["RETRO_HUD_CREATURE"] = "tiny"
+        self.put_state(size="tall")
+        self.assertEqual(len(sl.render(self.payload(FULL), 160, NOW)), 3)
+
+    def test_degraded_fallback_line_counts(self):
+        import contextlib
+        import io
+        saved = sl.render
+        sl.render = lambda *a: 1 / 0
+        try:
+            for env, n in (("tiny", 2), ("big", 2), ("tall", 3), ("0", 2)):
+                os.environ["RETRO_HUD_CREATURE"] = env
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    sl.main(["--demo"])
+                self.assertEqual(len(buf.getvalue().split("\n")), n, env)
+        finally:
+            sl.render = saved
+
+
 class TestCreatureCLI(unittest.TestCase):
     SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.py")
 
@@ -3082,7 +3160,7 @@ class TestCreatureCLI(unittest.TestCase):
                               stderr=subprocess.PIPE, env=env, timeout=10)
 
     def test_line_counts(self):
-        for creature, newlines in (("1", 2), ("0", 1)):
+        for creature, newlines in (("tall", 2), ("big", 1), ("tiny", 1), ("", 1), ("0", 1)):
             for stdin, args in ((b"", ()), (b"{not json", ()), (b"", ("--demo",))):
                 p = self.run_script(stdin, creature, *args)
                 self.assertEqual(p.returncode, 0, p.stderr.decode())
@@ -3094,7 +3172,7 @@ class TestCreatureCLI(unittest.TestCase):
         import io
         saved = sl.render
         sl.render = lambda *a: 1 / 0
-        os.environ["RETRO_HUD_CREATURE"] = "1"
+        os.environ["RETRO_HUD_CREATURE"] = "tall"
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
