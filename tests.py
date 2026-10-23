@@ -1047,6 +1047,145 @@ class TestHooksMerge(PresenceCase):
         self.assertIn("/o.o/", self.row1(NOW + 10).replace("\\o.o\\", "/o.o/"))
 
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+HOOK = os.path.join(HERE, "presence-hook.sh")
+
+
+class TestPresenceHook(unittest.TestCase):
+    """presence-hook.sh: a Claude Code hook appending one JSON line."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(dir=_SUITE_TMP)
+        self.cache = os.path.join(self.tmp, "cache")
+
+    def run_hook(self, stdin, *args, cache=None):
+        env = dict(os.environ, RETRO_HUD_CACHE_DIR=cache or self.cache)
+        return subprocess.run(["bash", HOOK] + list(args), input=stdin.encode(),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=env, timeout=10)
+
+    def lines(self, sid):
+        with open(os.path.join(self.cache, sid + ".hooks.jsonl")) as f:
+            return [json.loads(l) for l in f]
+
+    def test_appends_state_line_silently(self):
+        before = time.time()
+        p = self.run_hook('{"session_id":"abc-1","hook_event_name":"Notification",'
+                          '"prompt":"say \\"session_id\\":\\"evil\\""}', "needs")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, b"", b""))
+        p = self.run_hook('{"session_id": "abc-1", "hook_event_name": "Stop"}', "yours")
+        got = self.lines("abc-1")
+        self.assertEqual([g["state"] for g in got], ["needs", "yours"])
+        for g in got:
+            self.assertGreaterEqual(g["ts"], int(before))
+            self.assertLessEqual(g["ts"], time.time() + 1)
+        hooks = sl.read_hooks(os.path.join(self.cache, "abc-1.hooks.jsonl"))
+        self.assertEqual([h[1] for h in hooks], ["needs", "yours"])
+
+    def test_state_from_the_event_when_no_argument(self):
+        cases = [('{"session_id":"s","hook_event_name":"Stop"}', "yours", ""),
+                 ('{"session_id":"s","hook_event_name":"UserPromptSubmit"}', "working", ""),
+                 ('{"session_id":"s","hook_event_name":"Notification",'
+                  '"notification_type":"permission_prompt"}', "needs", ""),
+                 ('{"session_id":"s","hook_event_name":"Notification",'
+                  '"notification_type":"idle_prompt"}', "yours", "idle_prompt")]
+        for stdin, _, _ in cases:
+            self.assertEqual(self.run_hook(stdin).returncode, 0)
+        got = self.lines("s")
+        self.assertEqual([(g["state"], g.get("src", "")) for g in got],
+                         [(c[1], c[2]) for c in cases])
+        # an unrelated notification records nothing
+        self.run_hook('{"session_id":"s","hook_event_name":"Notification",'
+                      '"notification_type":"auth_success"}')
+        self.assertEqual(len(self.lines("s")), 4)
+
+    def test_never_fails_never_speaks(self):
+        blocker = os.path.join(self.tmp, "file")
+        open(blocker, "w").close()
+        for stdin, args, cache in (("{not json", ("yours",), None),
+                                   ("", ("yours",), None),
+                                   ('{"session_id":"../../x"}', ("yours",), None),
+                                   ('{"session_id":"ok"}', ("bogus",), None),
+                                   ('{"session_id":"ok"}', ("yours",),
+                                    os.path.join(blocker, "sub"))):
+            p = self.run_hook(stdin, *args, cache=cache)
+            self.assertEqual((p.returncode, p.stdout), (0, b""), (stdin, args))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "x.hooks.jsonl")))
+        self.assertFalse(os.path.exists(os.path.join(self.cache, "ok.hooks.jsonl")))
+
+
+class TestInstallHooks(unittest.TestCase):
+    """install.sh --hooks against a throwaway HOME."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp(dir=_SUITE_TMP)
+        self.claude = os.path.join(self.home, ".claude")
+        os.makedirs(self.claude)
+        self.settings = os.path.join(self.claude, "settings.json")
+        with open(self.settings, "w") as f:
+            json.dump({"env": {"X": "1"}, "hooks": {"Stop": [
+                {"hooks": [{"type": "command", "command": "echo mine"}]}]}}, f)
+
+    def sh(self, script, *args):
+        env = dict(os.environ, HOME=self.home)
+        return subprocess.run(["bash", os.path.join(HERE, script)] + list(args),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=env, timeout=30)
+
+    def load(self):
+        with open(self.settings) as f:
+            return json.load(f)
+
+    def ours(self, data):
+        found = []
+        for event, groups in data.get("hooks", {}).items():
+            for g in groups:
+                for h in g.get("hooks", []):
+                    if "presence-hook.sh" in h.get("command", ""):
+                        found.append((event, g.get("matcher", ""), h["command"]))
+        return sorted(found)
+
+    def test_plain_install_adds_no_hooks(self):
+        p = self.sh("install.sh")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        self.assertEqual(self.ours(self.load()), [])
+
+    def test_hooks_merge_idempotently_with_backup(self):
+        for _ in range(2):
+            p = self.sh("install.sh", "--hooks")
+            self.assertEqual(p.returncode, 0, p.stderr.decode())
+        data = self.load()
+        hook = os.path.join(self.claude, "presence-hook.sh")
+        self.assertTrue(os.path.isfile(hook))
+        self.assertEqual([(e, m) for e, m, _ in self.ours(data)],
+                         [("Notification", "idle_prompt"),
+                          ("Notification", "permission_prompt"),
+                          ("Stop", ""), ("UserPromptSubmit", "")])
+        cmds = {(e, m): c for e, m, c in self.ours(data)}
+        self.assertTrue(cmds[("Stop", "")].endswith("presence-hook.sh yours"))
+        self.assertTrue(cmds[("UserPromptSubmit", "")].endswith(" working"))
+        self.assertTrue(cmds[("Notification", "permission_prompt")].endswith(" needs"))
+        self.assertTrue(cmds[("Notification", "idle_prompt")].endswith(" yours idle_prompt"))
+        # the user's own hook and settings survive
+        self.assertIn({"hooks": [{"type": "command", "command": "echo mine"}]},
+                      data["hooks"]["Stop"])
+        self.assertEqual(data["env"], {"X": "1"})
+        self.assertIn("statusLine", data)
+        backups = [n for n in os.listdir(self.claude) if n.startswith("settings.json.bak")]
+        self.assertGreaterEqual(len(backups), 1)
+
+    def test_uninstall_removes_only_our_hooks(self):
+        self.sh("install.sh", "--hooks")
+        p = self.sh("uninstall.sh")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        data = self.load()
+        self.assertEqual(self.ours(data), [])
+        self.assertEqual(data["hooks"]["Stop"],
+                         [{"hooks": [{"type": "command", "command": "echo mine"}]}])
+        self.assertNotIn("Notification", data["hooks"])
+        self.assertFalse(os.path.exists(os.path.join(self.claude, "presence-hook.sh")))
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")
