@@ -40,6 +40,7 @@ terminal narrows, so neither number flickers away under you.
 """
 __version__ = "2.7.0"
 
+import calendar
 import json
 import os
 import re
@@ -348,6 +349,129 @@ def num(v, default=0):
         return int(float(v))
     except (TypeError, ValueError):
         return default
+
+
+# ── agent presence: what the session's agent is doing ──
+# Only entry type, stop reason, error flag and timestamp are read — never
+# message text, beyond a 40-char prefix test for harness markers.
+TAIL_BYTES = 64 * 1024    # transcript tail read on every refresh
+TAIL_MAX = 1024 * 1024    # widened read when one huge line hides every message
+IDLE_S = 10 * 60          # "yours" this long → idle
+SLEEP_S = 60 * 60         # "yours" this long → asleep
+ERROR_WINDOW_S = 60       # ≥ 2 failed tool results within this window …
+ERROR_HOLD_S = 30         # … hold the error state this long after the newest
+_HARNESS_MARKERS = ("<command-name>", "<local-command-stdout>",
+                    "<local-command-caveat>")
+_TURN_ENDS = ("end_turn", "stop_sequence", "max_tokens", "refusal")
+
+
+def parse_ts(s):
+    """Transcript ISO-8601 UTC timestamp → epoch seconds, or None."""
+    if not isinstance(s, str) or len(s) < 19:
+        return None
+    try:
+        t = calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+    m = re.match(r"\.(\d+)", s[19:])
+    return t + float("0." + m.group(1)) if m else t
+
+
+def tail_entries(path, limit=TAIL_BYTES):
+    """Parse the JSONL entries in the last `limit` bytes of a transcript.
+
+    Returns (entries oldest→newest, bytes read). The cut first line is
+    dropped. If no message entry survives (one huge line can fill the
+    window) the read widens once, up to TAIL_MAX.
+    """
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            while True:
+                start = max(size - limit, 0)
+                f.seek(start)
+                buf = f.read(limit)
+                lines = buf.split(b"\n")
+                if start > 0:
+                    lines = lines[1:]
+                entries = []
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        e = json.loads(line.decode("utf-8", "replace"))
+                    except ValueError:
+                        continue
+                    if isinstance(e, dict):
+                        entries.append(e)
+                if start == 0 or limit >= TAIL_MAX or any(
+                        e.get("type") in ("user", "assistant") for e in entries):
+                    return entries, len(buf)
+                limit = TAIL_MAX
+    except (OSError, TypeError, ValueError):
+        return [], 0
+
+
+def _classify(e):
+    """(activity, ts, is_error) for a message entry, or None to skip it."""
+    kind = e.get("type")
+    if kind not in ("user", "assistant") or e.get("isMeta"):
+        return None
+    ts = parse_ts(e.get("timestamp"))
+    msg = e.get("message")
+    if ts is None or not isinstance(msg, dict):
+        return None
+    if kind == "assistant":
+        return ("yours" if msg.get("stop_reason") in _TURN_ENDS else "working"), ts, False
+    content = msg.get("content")
+    if isinstance(content, str):
+        first = content
+    elif isinstance(content, list) and content and isinstance(content[0], dict):
+        first = content[0].get("text") if content[0].get("type") == "text" else ""
+    else:
+        return None
+    head = (first or "")[:40] if isinstance(first, str) else ""
+    if head.startswith(_HARNESS_MARKERS):
+        return None
+    if head.startswith("[Request interrupted"):
+        return "yours", ts, False
+    err = isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error") is True
+        for b in content)
+    return "working", ts, err
+
+
+def _decay(state, since, now, idle_s, sleep_s):
+    if state == "yours" and now - since >= sleep_s:
+        return "asleep"
+    if state == "yours" and now - since >= idle_s:
+        return "idle"
+    return state
+
+
+def agent_state(entries, now, idle_s=IDLE_S, sleep_s=SLEEP_S):
+    """(state, since) from transcript entries (oldest→newest).
+
+    state: error | working | yours | idle | asleep | unknown. `since` is
+    the newest message entry's timestamp (the newest error's for `error`).
+    """
+    newest, errors = None, []
+    for e in entries:
+        c = _classify(e) if isinstance(e, dict) else None
+        if c is None:
+            continue
+        newest = c
+        if c[2]:
+            errors.append(c[1])
+    if newest is None:
+        return "unknown", 0
+    if errors:
+        last = max(errors)
+        burst = sum(1 for t in errors if t >= last - ERROR_WINDOW_S)
+        if burst >= 2 and now - last < ERROR_HOLD_S:
+            return "error", last
+    state, since = newest[0], newest[1]
+    return _decay(state, since, now, idle_s, sleep_s), since
 
 
 # ── row assembly ──

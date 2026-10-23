@@ -1,16 +1,56 @@
 #!/usr/bin/env python3
 """retro-hud test suite — stdlib only. Run: python3 tests.py"""
 import copy
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
+
+# Presence knobs from the caller's shell must not leak into the suite (the
+# CLI tests inherit os.environ), and nothing may touch the real cache dir.
+for _k in ("RETRO_HUD_PRESENCE", "RETRO_HUD_SPRITE", "RETRO_HUD_AGENT_NAME",
+           "RETRO_HUD_QUIPS", "RETRO_HUD_IDLE_MIN", "RETRO_HUD_SLEEP_MIN",
+           "RETRO_HUD_ALIEN"):
+    os.environ.pop(_k, None)
+_SUITE_TMP = tempfile.mkdtemp(prefix="retro-hud-tests-")
+os.environ["RETRO_HUD_CACHE_DIR"] = os.path.join(_SUITE_TMP, "cache")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import statusline as sl
 
 NOW = 1_800_000_000
+
+
+def iso(t):
+    """Transcript-style ISO timestamp for epoch t."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(t))) + \
+        ".{:03d}Z".format(int(round((t - int(t)) * 1000)))
+
+
+def asst(t, stop="end_turn", blocks=("text",)):
+    return {"type": "assistant", "timestamp": iso(t),
+            "message": {"role": "assistant", "stop_reason": stop,
+                        "content": [{"type": b} for b in blocks]}}
+
+
+def user(t, text="do the thing", meta=False):
+    e = {"type": "user", "timestamp": iso(t),
+         "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+    if meta:
+        e["isMeta"] = True
+    return e
+
+
+def result(t, is_error=False):
+    return {"type": "user", "timestamp": iso(t),
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "x", "is_error": is_error,
+                 "content": "..."}]}}
 
 FULL = {
     "model": {"display_name": "Fable 5"},
@@ -378,6 +418,154 @@ class TestHomeLink(unittest.TestCase):
         row = sl.render(copy.deepcopy(MINIMAL), 160, NOW)[1]
         self.assertIn("\x1b]8;;x://a[31mbc\a⌂", row)
         self.assertNotIn("\n", row)
+
+
+class TestAgentState(unittest.TestCase):
+    """agent_state(): the transcript tail → what the agent is doing."""
+
+    def state(self, entries, now=NOW):
+        return sl.agent_state(entries, now)[0]
+
+    def test_unknown_without_message_entries(self):
+        self.assertEqual(sl.agent_state([], NOW), ("unknown", 0))
+        self.assertEqual(self.state([{"type": "last-prompt"}, {"type": "mode"}]), "unknown")
+
+    def test_end_turn_is_yours(self):
+        self.assertEqual(sl.agent_state([user(NOW - 20), asst(NOW - 5)], NOW),
+                         ("yours", NOW - 5))
+
+    def test_tool_use_and_user_entries_are_working(self):
+        self.assertEqual(self.state([asst(NOW - 3, "tool_use", ("tool_use",))]), "working")
+        self.assertEqual(self.state([asst(NOW - 9), user(NOW - 2)]), "working")
+        self.assertEqual(self.state([asst(NOW - 9, "tool_use"), result(NOW - 1)]), "working")
+
+    def test_null_stop_reason_is_still_streaming(self):
+        self.assertEqual(self.state([user(NOW - 9), asst(NOW - 1, None)]), "working")
+
+    def test_turn_ending_stop_reasons_are_yours(self):
+        # synthetic API-error replies end the turn with stop_sequence
+        for stop in ("stop_sequence", "max_tokens", "refusal"):
+            self.assertEqual(self.state([asst(NOW - 1, stop)]), "yours", stop)
+
+    def test_idle_and_asleep_thresholds(self):
+        self.assertEqual(self.state([asst(NOW - 599)]), "yours")
+        self.assertEqual(sl.agent_state([asst(NOW - 600)], NOW), ("idle", NOW - 600))
+        self.assertEqual(self.state([asst(NOW - 3599)]), "idle")
+        self.assertEqual(self.state([asst(NOW - 3600)]), "asleep")
+        # thresholds are parameters (the env knobs feed them)
+        self.assertEqual(sl.agent_state([asst(NOW - 120)], NOW, idle_s=60)[0], "idle")
+        self.assertEqual(sl.agent_state([asst(NOW - 120)], NOW, sleep_s=100)[0], "asleep")
+
+    def test_non_message_types_skipped(self):
+        noise = [{"type": t, "timestamp": iso(NOW)} for t in
+                 ("attachment", "system", "last-prompt", "api-request",
+                  "file-history-snapshot", "mode", "queue-operation")]
+        # api-request-blob carries a full message but is not a message entry
+        noise.append({"type": "api-request-blob",
+                      "message": {"stop_reason": "tool_use", "content": []}})
+        self.assertEqual(self.state([asst(NOW - 5)] + noise), "yours")
+
+    def test_meta_and_harness_entries_are_not_the_user(self):
+        for text in ("<command-name>/clear</command-name>",
+                     "<local-command-stdout>ok</local-command-stdout>",
+                     "<local-command-caveat>Caveat: ...</local-command-caveat>"):
+            self.assertEqual(self.state([asst(NOW - 5), user(NOW - 1, text)]), "yours", text)
+        self.assertEqual(self.state([asst(NOW - 5), user(NOW - 1, meta=True)]), "yours")
+        # the marker test is a prefix test only
+        self.assertEqual(self.state([asst(NOW - 5), user(NOW - 1, "see <command-name>")]),
+                         "working")
+
+    def test_string_content_is_handled(self):
+        e = user(NOW - 1)
+        e["message"]["content"] = "<command-name>/model</command-name>"
+        self.assertEqual(self.state([asst(NOW - 5), e]), "yours")
+        e["message"]["content"] = "plain prompt"
+        self.assertEqual(self.state([asst(NOW - 5), e]), "working")
+
+    def test_interrupt_hands_the_turn_back(self):
+        self.assertEqual(self.state([asst(NOW - 5, "tool_use"),
+                                     user(NOW - 1, "[Request interrupted by user]")]),
+                         "yours")
+
+    def test_error_burst(self):
+        burst = [result(NOW - 40, True), result(NOW - 10, True), asst(NOW - 8, "tool_use")]
+        self.assertEqual(sl.agent_state(burst, NOW), ("error", NOW - 10))
+        # held 30 s from the newest error, then released
+        self.assertEqual(self.state(burst, NOW + 19), "error")
+        self.assertEqual(self.state(burst, NOW + 20), "working")
+
+    def test_single_error_is_not_a_flinch(self):
+        self.assertEqual(self.state([result(NOW - 5, True), asst(NOW - 4, "tool_use")]),
+                         "working")
+        # two errors more than 60 s apart are not a burst either
+        self.assertEqual(self.state([result(NOW - 75, True), result(NOW - 5, True)]),
+                         "working")
+        # is_error None / False never count
+        self.assertEqual(self.state([result(NOW - 5, None), result(NOW - 4, None)]),
+                         "working")
+
+    def test_malformed_entries_skipped(self):
+        bad = [None, 3, "x", {"type": "user"}, {"type": "assistant", "timestamp": "nope"},
+               {"type": "user", "timestamp": iso(NOW), "message": "str"}]
+        self.assertEqual(self.state([asst(NOW - 5)] + bad), "yours")
+
+    def test_parse_ts(self):
+        self.assertEqual(sl.parse_ts(iso(NOW)), NOW)
+        self.assertAlmostEqual(sl.parse_ts("2027-01-15T08:00:00.250Z"),
+                               sl.parse_ts("2027-01-15T08:00:00Z") + 0.25)
+        for bad in (None, "", "yesterday", 5):
+            self.assertIsNone(sl.parse_ts(bad))
+
+
+class TestTranscriptTail(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(dir=_SUITE_TMP)
+        self.path = os.path.join(self.dir, "t.jsonl")
+
+    def write(self, lines):
+        with open(self.path, "w") as f:
+            for e in lines:
+                f.write((e if isinstance(e, str) else json.dumps(e)) + "\n")
+
+    def test_missing_file(self):
+        self.assertEqual(sl.tail_entries(os.path.join(self.dir, "nope")), ([], 0))
+        self.assertEqual(sl.tail_entries(""), ([], 0))
+
+    def test_reads_entries_in_order(self):
+        self.write([user(NOW - 9), "{broken", asst(NOW - 1)])
+        entries, n = sl.tail_entries(self.path)
+        self.assertEqual([e["type"] for e in entries], ["user", "assistant"])
+        self.assertEqual(n, os.path.getsize(self.path))
+
+    def test_huge_file_reads_only_the_tail(self):
+        pad = {"type": "attachment", "blob": "x" * 2000}
+        self.write([user(NOW - 99)] + [pad] * 2000 + [asst(NOW - 5)])
+        self.assertGreater(os.path.getsize(self.path), 3 * 1024 * 1024)
+        entries, n = sl.tail_entries(self.path)
+        self.assertEqual(n, sl.TAIL_BYTES)
+        self.assertEqual(sl.agent_state(entries, NOW)[0], "yours")
+        # the partial first line is dropped, never mis-parsed
+        self.assertTrue(all(isinstance(e, dict) for e in entries))
+
+    def test_partial_first_line_dropped(self):
+        # the 64 KB cut lands inside an older message line: it must not count
+        cut = asst(NOW - 9, "tool_use")
+        cut["pad"] = "x" * (sl.TAIL_BYTES + 10)
+        self.write([cut, user(NOW - 3)])
+        entries, n = sl.tail_entries(self.path)
+        self.assertEqual(n, sl.TAIL_BYTES)
+        self.assertEqual([e["type"] for e in entries], ["user"])
+
+    def test_big_newest_entry_widens_the_tail(self):
+        # one line bigger than the 64 KB floor (a large tool result, an
+        # api-request-shape) must not blind the reader
+        big = {"type": "api-request-shape", "blob": "y" * (sl.TAIL_BYTES + 5000)}
+        self.write([{"type": "attachment", "blob": "z" * 3000}] * 400 +
+                   [asst(NOW - 5), big])
+        entries, n = sl.tail_entries(self.path)
+        self.assertGreater(n, sl.TAIL_BYTES)
+        self.assertLessEqual(n, sl.TAIL_MAX)
+        self.assertEqual(sl.agent_state(entries, NOW)[0], "yours")
 
 
 class TestHelpers(unittest.TestCase):
