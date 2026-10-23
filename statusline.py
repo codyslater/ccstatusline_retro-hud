@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Claude Code statusLine — RETRO SCI-FI HUD
 
-Two-row HUD with a full wireframe, zoned gauges, and width-aware
-degradation, plus a head line above it for the pixel creature. Reads the
-statusline JSON payload on stdin and prints three ANSI lines sized to
-$COLUMNS (two with RETRO_HUD_CREATURE=0).
+Two-row HUD with a full wireframe, zoned gauges, width-aware
+degradation and a living pixel creature on the frame. Reads the
+statusline JSON payload on stdin and prints two ANSI lines sized to
+$COLUMNS (three with RETRO_HUD_CREATURE=tall).
 
 Flags:
     --version   print version and exit
@@ -23,8 +23,8 @@ Env toggles:
                                  cycle (alternate % and time-to-reset every
                                  30s, every 10s in the red zone), pct, time,
                                  or both
-    RETRO_HUD_ALIEN=0            ground the creature (or alien) that patrols
-                                 the top rule; the head line stays, blank
+    RETRO_HUD_ALIEN=0            ground the creature (or alien) that walks
+                                 the top rule (a tall head line stays, blank)
     RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
                                  always, or never
     RETRO_HUD_MARGIN=4           columns kept free at the right edge (raise if
@@ -41,7 +41,15 @@ Env toggles:
                                  retro-hud://usage everywhere. Needs a
                                  handler for the scheme (install.sh --handler)
     RETRO_HUD_PRESENCE=0         gauge-only creature: ignore what the agent does
-    RETRO_HUD_CREATURE=0         the 2.x two-row HUD with the text-art alien
+    RETRO_HUD_CREATURE=tiny      the creature's size: tiny (braille dots on
+                                 the top rule), big (half blocks straddling
+                                 rows 1 and 2), tall (half blocks with a
+                                 head line: three lines), or 0 for the 2.x
+                                 HUD with the text-art alien. The state
+                                 file's `size` wins, except over 0
+    RETRO_HUD_TICK_S=1           seconds per creature frame (pair with
+                                 statusLine.refreshInterval 1 to see it move
+                                 every second)
     RETRO_HUD_CREATURE_SEED=<s>  pin the creature's look (integer or any
                                  string; default: the session id)
     RETRO_HUD_CREATURE_COLOR=<c> pin its colour: pink, green, purple, cyan,
@@ -61,8 +69,9 @@ Env toggles:
     RETRO_HUD_SLEEP_MIN=60       minutes of "your turn" before asleep
     RETRO_HUD_CACHE_DIR=<dir>    presence files (default ~/.cache/retro-hud)
 
-Agent presence: the creature on the top rule (a seeded 9x4 pixel monster
-drawn in half blocks, upper half on the head line) follows the session's agent,
+Agent presence: the creature on the top rule (a seeded pixel monster in
+braille or half blocks that wanders, blinks, breathes and hops on its own,
+frame = now // RETRO_HUD_TICK_S) follows the session's agent,
 read from a bounded tail of the transcript (entry type, stop reason,
 error flag and timestamp only; never message text) and, when
 `install.sh --hooks` was run, from presence-hook.sh's log. It hustles
@@ -74,7 +83,7 @@ beside it come from the events channel
 per line; "icon" is one character the creature holds up), from state
 changes, and from rare idle quips; an event whose text is "wave" makes it
 wave instead. With RETRO_HUD_ACTIONS=1 in tmux the creature links to
-retro-hud://agent (wave, quiet, sprite, reroll, status).
+retro-hud://agent (wave, quiet, sprite, size, reroll, status).
 
 Rate-limit label escalation: while a gauge is calm its label cycles (or
 is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
@@ -944,11 +953,12 @@ def _map_pane(d, sid):
 
 
 # ── pixel creature (RETRO_HUD_CREATURE, on by default) ──
-# The agent's presence as a small mirrored pixel monster: a 9×4 body
-# generated from a seed, drawn with half blocks (one text cell carries two
-# pixel rows), so its upper half sits on a head line above row 1 and its
-# lower half stands on the top rule. It owns a fixed 13-cell box on both
-# lines and nothing else: rows 1 and 2 never move.
+# The agent's presence as a small mirrored pixel monster generated from a
+# seed. tiny (the default): a 10×4-dot body in braille on the top rule.
+# big and tall: a 9×4 body in half blocks (one text cell carries two pixel
+# rows), straddling rows 1 and 2 (big) or with its upper half on a head
+# line above row 1 (tall). It owns a fixed box and nothing else: the
+# segments, corners and row 2's readings never move.
 FAMILIES = ("blob", "beast", "alien", "bot")
 _FAMILY_ALIAS = {"cat": "beast", "robot": "bot", "ghost": "blob"}
 CREATURE_COLORS = {"pink": 198, "green": 46, "purple": 135, "cyan": 45, "orange": 202}
@@ -1817,7 +1827,7 @@ def tick_s():
 
 def render(data, cols, now):
     """Return [row1, row2] sized to cols, or [head line, row1, row2]
-    with the pixel creature (RETRO_HUD_CREATURE, on by default)."""
+    with the tall creature (RETRO_HUD_CREATURE=tall)."""
     global _EMOJI_W
     frame_on = os.environ.get("RETRO_HUD_FRAME", "1") != "0"
     size = creature_size(data)

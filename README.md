@@ -81,50 +81,66 @@ cycling beside a warning one.
 ### Agent presence
 
 A small pixel creature lives on the top frame rule and acts as the visible
-presence of the agent running in that session: it hustles while the agent
-works, throws its arms up when the turn is yours, bounces when a
-permission prompt is waiting, and dozes off when nothing happens. By
-default it speaks only when something needs you (`need you`, `compact?`,
-`limit soon`) or when a local tool sends it a message;
-`RETRO_HUD_BUBBLES=all` adds the narration (`ready`, `hm.`, `zZ`, idle
-quips) and `RETRO_HUD_BUBBLES=off` silences it.
+presence of the agent running in that session: it wanders, blinks,
+breathes and hops while things are calm, hurries while the agent works,
+waves when the turn is yours, bounces when a permission prompt is waiting,
+and dozes off when nothing happens. By default it speaks only when
+something needs you (`need you`, `compact?`, `limit soon`) or when a local
+tool sends it a message; `RETRO_HUD_BUBBLES=all` adds the narration
+(`ready`, `hm.`, `zZ`, idle quips) and `RETRO_HUD_BUBBLES=off` silences it.
 
-**Layout.** The HUD has three lines. The creature is 4 pixels tall and
-drawn in half blocks (`▀` `▄`, one text cell holds two pixel rows), so its
-upper half sits on a **head line** printed above the frame and its lower
-half stands on the rule of row 1:
+**Sizes.** `RETRO_HUD_CREATURE` picks how it is drawn:
+
+| Value | Creature | HUD |
+|-------|----------|-----|
+| `tiny` (default) | braille dots (2×4 per text cell), a 10×4-dot body in a 7-cell box on the top rule | two lines |
+| `big` | half blocks (`▀` `▄`, two pixel rows per cell), a 9×4-pixel body straddling rows 1 and 2 at the right end of the rule | two lines |
+| `tall` | the same half-block body with its upper half on a head line printed above the frame | three lines |
+| `0` | the 2.x text-art alien (`/o.o\`) and its sprite sets, byte for byte | two lines |
 
 ```
-                                                     ▄▀▄▀▄
-┌─[ Fable 5 ] // 📂 my-project ─────────────────────▀▀▀▀▀▀▀────────────┐
-└─█▋   42% // $4.20 ───────────────────────────────────────────────────┘
+tiny   ┌─[ Fable 5 ] // 📂 my-project ──────────⠈⢎⣹⣉⠎──────────────────────┐
+       └─█▋   42% // $4.20 ──────────────────────────────────────────────┘
+
+big    ┌─[ Fable 5 ] // 📂 my-project ──────────────────────▄▀▄▀▄─────────┐
+       └─█▋   42% // $4.20 ───────────────────────────────▀▀▀▀▀▀▀────────┘
+
+tall                                                     ▄▀▄▀▄
+       ┌─[ Fable 5 ] // 📂 my-project ─────────────────▀▀▀▀▀▀▀──────────┐
+       └─█▋   42% // $4.20 ──────────────────────────────────────────────┘
 ```
 
-The head line holds nothing but the creature and its bubble. The creature
-owns a fixed 13-cell box on both lines (9 body cells and 2 to spare on
-each side); every pose, arm, shake and icon stays inside it, so the
-segments, the frame corners and row 2 never move. When the rule is
-shorter than 17 cells the creature hides and the head line is blank, and
-it is blank too with `RETRO_HUD_ALIEN=0` or `RETRO_HUD_FRAME=0`: the HUD
-is always three lines, never two then three. `RETRO_HUD_CREATURE=0`
-brings back the 2.x two-row HUD with the text-art alien (`/o.o\`) and its
-sprite sets, byte for byte.
+The creature owns a fixed box (7 cells for `tiny`, 13 for `big` and
+`tall`) and only rule cells inside it; every pose, arm, shake, `?` and
+icon stays inside the box, so the segments, the frame corners and row 2's
+readings never move. `tiny` moves in half cells: a one-dot step re-draws
+the braille cells. `big` walks the stretch of rule that rows 1 and 2
+share (row 2's rule starts after its last segment). When that rule is
+too short (under 11 cells for `tiny`, 17 for the others) the creature
+hides; `tall` then prints a blank head line, so it is always three lines,
+never two then three. The click menu's **size ▸** writes `size` to the
+session's state file, which wins over the environment; `0` always wins.
 
-**One creature per session.** Its body is a 9×4 mirrored, connected
-pixel grid with two eyes, generated from a seed: the session id by
-default (so each session has its own, and keeps it across refreshes and
-restarts), or `RETRO_HUD_CREATURE_SEED` (any integer or string) to pin
-one, e.g. the agent you always run in a given terminal. Its colour comes
-from the same seed — $\color{#ff0087}{\textsf{pink}}$,
-$\color{#00ff00}{\textsf{green}}$, $\color{#af5fff}{\textsf{purple}}$ or
-$\color{#00d7ff}{\textsf{cyan}}$ — and `RETRO_HUD_CREATURE_COLOR` pins it
-(one of those names, `orange`, or a 256-colour index).
+**One creature per session.** The `alien` family (the default) keeps the
+2.x guy at dot scale in `tiny`: two round eyes side by side (`o.o`), arms
+splayed up from the top corners (`/` `\`), green, turning amber and red
+with the gauges; it blinks to a slit (`-.-`), pulls its arms in and down
+when agitated (`>o.o<`) and throws them up in the red zone (`\o.o/`).
+Every other body is a mirrored, connected grid with two eyes (holes in
+`tiny`, since a braille cell has one colour), generated from a seed: the
+session id by default (so each session has its own, and keeps it across
+refreshes and restarts), or `RETRO_HUD_CREATURE_SEED` (any integer or
+string) to pin one. Its colour comes from the same seed —
+$\color{#ff0087}{\textsf{pink}}$, $\color{#00ff00}{\textsf{green}}$,
+$\color{#af5fff}{\textsf{purple}}$ or $\color{#00d7ff}{\textsf{cyan}}$ —
+and `RETRO_HUD_CREATURE_COLOR` pins it (one of those names, `orange`, or a
+256-colour index).
 
 **Families** set its shape vocabulary, with `RETRO_HUD_SPRITE`:
 
 | Family | Shape |
 |--------|-------|
-| `alien` (default) | narrow head, antennae, three legs |
+| `alien` (default) | `tiny`: the 2.x guy; `big`/`tall`: narrow head, antennae, three legs |
 | `beast` | wide shoulders, ears, two legs |
 | `blob` | round, a wide base instead of legs |
 | `bot` | square, eyes far apart, two legs |
@@ -132,32 +148,57 @@ $\color{#00d7ff}{\textsf{cyan}}$ — and `RETRO_HUD_CREATURE_COLOR` pins it
 The 2.x sprite names still work: `cat` → beast, `robot` → bot,
 `ghost` → blob.
 
+**It is alive.** Every frame is a pure function of the seed, the mood,
+when the mood began and the clock, so a refresh never re-rolls it. The
+frame index is the time divided by `RETRO_HUD_TICK_S` (default 1 second).
+On its own the creature **wanders**: it eases toward a spot on the rule,
+rests there for 2–6 frames and picks another (slowly when calm, faster
+while the agent works). It **blinks** (about one frame in seven),
+**breathes** (one dot or pixel wider every fourth frame) and, while calm or
+working, **hops** (about one frame in twelve). For motion every second,
+let Claude Code redraw the status line every second: set
+`refreshInterval` to 1 in the `statusLine` block of
+`~/.claude/settings.json`:
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "bash ~/.claude/statusline-command.sh",
+  "refreshInterval": 1
+}
+```
+
+With a longer interval (the installer sets 5) you see the same walk,
+sampled every 5 seconds.
+
 **What it reacts to**, highest priority first. The body keeps its colour
 except under a hot gauge; the mood shows in the pose and the eyes:
 
 | Mood | Pose | Trigger | Moves |
 |------|------|---------|-------|
-| $\color{#ff0000}{\textsf{red alert}}$ | body turns red, spins once (20s), then shakes | any gauge ≥ 90% | 4× |
-| error | shakes in place, pink `x` eyes | ≥ 2 failed tool calls within 60s (held 30s) | parked |
-| $\color{#ff8700}{\textsf{agitated}}$ | body turns amber, wide eyes | any gauge ≥ 70% | 2× |
-| needs you | bounces, yellow eyes, a yellow `?` | a permission prompt is open (needs `--hooks`) | parked |
-| working | walk cycle: the legs step | the agent is on it | 3× |
-| your turn | arms up, a jump as it starts | the agent finished its turn | parked 30s, then 1× |
-| idle | squashed, dim eyes that blink shut | your turn for 10 min | parked (`z` with `BUBBLES=all`) |
-| asleep | melted flat onto the rule, head line empty | your turn for 60 min | parked (`zZ` with `BUBBLES=all`) |
-| calm | upright | nothing known (no transcript yet) | 1× |
+| $\color{#ff0000}{\textsf{red alert}}$ | body turns red; `tiny` jitters, `big`/`tall` spin once (20s), then shake | any gauge ≥ 90% | 4× |
+| error | shakes in place (pink `x` eyes in `big`/`tall`) | ≥ 2 failed tool calls within 60s (held 30s) | parked |
+| $\color{#ff8700}{\textsf{agitated}}$ | body turns amber, wide eyes (the `tiny` alien: arms in and down) | any gauge ≥ 70% | 2× |
+| needs you | bounces, a yellow `?` beside it | a permission prompt is open (needs `--hooks`) | parked |
+| working | walk cycle: the legs step; hops | the agent is on it | 3× |
+| your turn | stops and waves its arms, a jump as it starts | the agent finished its turn | parked 30s, then 1× |
+| idle | slow blinks (`big`/`tall`: squashed, dim eyes) | your turn for 10 min | parked (`z` with `BUBBLES=all`) |
+| asleep | flat on the rule (the bottom two dot or pixel rows), no blinking | your turn for 60 min | parked (`zZ` with `BUBBLES=all`) |
+| calm | upright; wanders, hops | nothing known (no transcript yet) | 1× |
 
-"Moves" is rule cells per 10s; parked moods walk to the left end of the
-rule, beside the model box, and stay there. When a mood starts, the
-creature scatters into loose pixels and reassembles over 10s. Each frame
-is a pure function of the seed, the mood, when the mood began and the
-clock, so a refresh never re-rolls it.
+"Moves" is the most it covers per frame: dots for `tiny` (two per cell),
+cells for `big` and `tall`. Parked moods walk to the left end of the rule,
+beside the model box, and stay there. When a mood starts, the creature
+scatters into loose dots and reassembles over 10s.
 
 The gauges still come first, so peripheral vision tells you something's
 hot before you read a number. The agent's state is read from the last
 64 KB of the session transcript: entry type, stop reason, error flag and
 timestamp only, never message text. A missing or unreadable transcript
 falls back to the gauge-only creature (calm, agitated or red).
+
+Nothing can be drawn inside Claude Code's input box: the status line owns
+only its own lines.
 
 **Hooks (recommended).** The transcript can't tell a pending permission
 prompt from a running tool, since both end in an unanswered tool call, so
@@ -173,8 +214,9 @@ notifications. It is plain bash, prints nothing and always exits 0. When a
 hook's report is newer than the transcript, the hook wins. `uninstall.sh`
 removes them again.
 
-**Bubbles** (up to 18 characters on the head line beside the creature,
-in its travel direction), from three sources in priority order:
+**Bubbles** (up to 18 characters beside the creature, in its travel
+direction: on the rule of row 1 for `tiny` and `big`, on the head line for
+`tall`), from three sources in priority order:
 
 1. **The events channel.** Any local tool can make the agent "say"
    something by appending one JSON line to
@@ -188,8 +230,8 @@ in its travel direction), from three sources in priority order:
    The newest unexpired line wins. The text `wave` is a gesture, not
    words: the creature raises its arms for the `ttl` instead (a red- or
    amber-zone gauge still wins). A line may also carry an **icon**, one
-   character the creature holds up, in yellow, above-right of its head
-   while the line is live (with or without `text`):
+   character the creature holds up, in yellow, at the right end of its
+   box beside its head while the line is live (with or without `text`):
 
    ```json
    {"ts": 1767225600, "icon": "⚑", "ttl": 120}
@@ -214,14 +256,16 @@ times the entry tics), the creature's family (`creature`, so the click
 menu knows it is on), plus a snapshot of state, since, context %, worst
 limit % and cost. Other tools may set `"mute_until": <epoch>` in it to
 silence every bubble until then, `"sprite"` to switch the family (or the
-2.x sprite set with the creature off), or `"seed"` to give the session a
-different creature; both win over the environment. The file is written
+2.x sprite set with the creature off), `"size"` (`tiny`, `big` or `tall`)
+to redraw it, or `"seed"` to give the session a different creature; each
+wins over the environment. The file is written
 atomically. If it can't be written, you get no bubbles and steady poses
 (no entry tics). Files untouched for 7 days are pruned.
 
 **`statusLine.refreshInterval` is required** for the idle and asleep
 states, for bubbles to expire, and for the creature to move between
-messages. The installer sets it to 5.
+messages. The installer sets it to 5; 1 makes the creature move every
+second (see above).
 
 **Click the creature.** With [click actions](#click-actions) on, the
 creature (not its bubble) is a link to a small menu: **wave** (appends a
@@ -229,7 +273,8 @@ creature (not its bubble) is a link to a small menu: **wave** (appends a
 hour ahead: no bubbles until then), **sprite ▸** (blob / beast / alien /
 bot writes `sprite` to the state file; *default* removes it and the env
 choice applies again; with the creature off it offers the 2.x sets
-alien / cat / robot / ghost), **reroll** (writes a new random `seed` for
+alien / cat / robot / ghost), **size ▸** (tiny / big / tall writes `size`
+to the state file; *default* removes it), **reroll** (writes a new random `seed` for
 this session and shows `pin it with RETRO_HUD_CREATURE_SEED=<n>`, in
 case you want to keep that look) and **status** (state, how long,
 context %, worst limit %, cost, from the state file's snapshot, as a
@@ -241,7 +286,7 @@ too (see below).
 
 `RETRO_HUD_PRESENCE=0` brings back the gauge-only creature, with no
 transcript reads and no files written. `RETRO_HUD_ALIEN=0` grounds the
-creature entirely (the head line stays, blank).
+creature entirely (with `tall` the head line stays, blank).
 
 ## Click actions
 
@@ -258,7 +303,7 @@ a slash command.
 | `$` cost | types `/cost` |
 | `+N/-M` lines | read-only popup: `git diff --stat`, then the diff in `less` |
 | rate-limit gauges | opens your usage page (`RETRO_HUD_USAGE_URL`) in the browser |
-| the creature | wave · quiet 1h · sprite ▸ · reroll · status (see [Agent presence](#agent-presence)) |
+| the creature | wave · quiet 1h · sprite ▸ · size ▸ · reroll · status (see [Agent presence](#agent-presence)) |
 
 The branch badge and PR number keep their GitHub links.
 
@@ -325,7 +370,7 @@ the same arguments and may handle a URL and `exit`.
 
 Every decoration and disclosure rule has an env-var knob (`RETRO_HUD_*`),
 and the installer sets `"refreshInterval": 5` so countdowns tick, the creature
-patrols, and the frame re-fits within seconds of a terminal resize. See
+wanders, and the frame re-fits within seconds of a terminal resize. See
 **[docs/configuration.md](docs/configuration.md)** for the full knob table,
 manual install, and the width troubleshooting guide (WSL2, VS Code).
 

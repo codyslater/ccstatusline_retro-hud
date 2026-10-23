@@ -13,53 +13,75 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   copies both files and resets `statusLine.refreshInterval`).
 
 ### Changed (breaking)
-- **The HUD is three lines by default.** A head line above the frame
-  carries the new pixel creature's upper half and its bubble; rows 1
-  and 2 keep their content, width and corners. `RETRO_HUD_CREATURE=0`
-  restores the v2.9.0 two-row output byte for byte, text-art alien
-  included.
+- **The alien becomes a living pixel creature.** By default
+  (`RETRO_HUD_CREATURE=tiny`) it is drawn in braille dots on the top rule
+  and the HUD stays two lines; rows 1 and 2 keep their content, width and
+  corners. `RETRO_HUD_CREATURE=0` restores the v2.9.0 two-row output byte
+  for byte, text-art alien included.
+- **The creature moves on its own clock.** The frame index is the time
+  divided by `RETRO_HUD_TICK_S` (default 1 s) instead of a fixed 10 s
+  tick, and the creature wanders instead of pacing end to end. Set
+  `statusLine.refreshInterval` to 1 to see it move every second; at 5 it
+  is the same motion sampled every 5 s.
 
 ### Added
-- **Pixel creature.** The agent's presence is now a small mirrored pixel
-  monster: a 9×4 body generated from a seed (the session id, or
-  `RETRO_HUD_CREATURE_SEED`), always 4-connected, two eyes on its second
-  pixel row, legs underneath. It is drawn in half blocks with a
-  256-colour foreground and background per cell, its upper half on the
-  head line and its lower half standing on the top rule, inside a fixed
-  13-cell box on both lines, so nothing else ever shifts. Below a
-  17-cell rule it hides and the head line is blank.
-- Families (`RETRO_HUD_SPRITE`): `alien` (default: antennae, three legs),
-  `beast`, `blob`, `bot`. The 2.x sprite names map to them (`cat` →
-  beast, `robot` → bot, `ghost` → blob).
+- **Sizes** (`RETRO_HUD_CREATURE`):
+  - `tiny` (default): braille, 2×4 dots per cell, a 10×4-dot body in a
+    fixed 7-cell box on the top rule, moving in half cells (a one-dot
+    step re-draws the cells). One colour per cell, so eyes are holes.
+    Hidden below an 11-cell rule.
+  - `big`: half blocks (`▀` `▄`, a 256-colour foreground and background
+    per cell), a 9×4-pixel body in a fixed 13-cell box straddling rows 1
+    and 2 on the stretch of rule they share; still two lines. Hidden
+    below a 17-cell shared rule.
+  - `tall`: the same half-block body with its upper half on a head line
+    above the frame: three lines, always (a blank head line when it
+    hides).
+- **One creature per session**, generated from a seed (the session id, or
+  `RETRO_HUD_CREATURE_SEED`): mirrored, 4-connected, two eyes, legs
+  underneath. Families (`RETRO_HUD_SPRITE`): `alien` (default), `beast`,
+  `blob`, `bot`; the 2.x sprite names map to them (`cat` → beast,
+  `robot` → bot, `ghost` → blob). In `tiny` the alien keeps the 2.x guy
+  at dot scale: two round eyes (`o.o`), arms splayed up from the top
+  corners, green; it blinks to a slit (`-.-`), pulls its arms in and down
+  when agitated (`>o.o<`) and throws them up in the red zone (`\o.o/`).
 - Colour from the seed: pink, green, purple or cyan;
   `RETRO_HUD_CREATURE_COLOR` pins a name or a 256-colour index. The body
   turns amber (agitated) or red (red zone) under a hot gauge; otherwise
   the mood shows in the pose and the eyes.
-- Poses: a walk cycle while working, arms up and a jump when the turn is
-  yours, a bounce with a yellow `?` when a prompt waits, squashed with
-  blinking dim eyes when idle, melted flat onto the rule when asleep
-  (head line empty), a shake with pink `x` eyes on an error burst, a
-  spin then a shake in the red zone, wide eyes when agitated. When a
-  mood starts the creature scatters into loose pixels and reassembles
-  over 10s. Parked moods walk to the left end of the rule and stay
-  there. Every frame is a pure function of seed, mood, mood start and
-  clock: a refresh never re-rolls it.
+- **Alive behaviour**, in every size, deterministic from (seed, frame):
+  it wanders (eases toward a seeded spot, rests 2–6 frames, picks
+  another; faster while working), blinks (about one frame in seven),
+  breathes (one dot or pixel wider every fourth frame) and hops while
+  calm or working (about one frame in twelve).
+- Poses: a walk cycle while working, stops and waves when the turn is
+  yours (a jump as it starts), a bounce with a yellow `?` when a prompt
+  waits, slow blinks when idle, flat on the rule when asleep, a shake on
+  an error burst (pink `x` eyes in the half-block sizes), jitters in the
+  red zone (`big`/`tall` spin once first), wide eyes when agitated. When a
+  mood starts the creature scatters into loose dots and reassembles over
+  10s. Parked moods walk to the left end of the rule and stay there.
+  Every frame is a pure function of seed, mood, mood start and clock: a
+  refresh never re-rolls it.
+- Bubbles sit beside the creature on the rule (`tiny`, `big`) or on the
+  head line (`tall`); the alerts-only default is unchanged.
 - Events-channel lines may carry `"icon": "<one character>"`, which the
   creature holds up in yellow beside its head while the line is live
   (with or without `text`).
 - The state file records `mood` and `mood_since` (when the current mood
   began; it times the entry tics) and `creature` (the family, so the
-  click menu knows the creature is on). A `seed` or `sprite` in it wins
-  over the environment.
-- Click menu: **reroll** writes a new random `seed` for the session and
-  shows `pin it with RETRO_HUD_CREATURE_SEED=<n>`; **sprite ▸** offers
-  the families while the creature is on.
+  click menu knows the creature is on). A `seed`, `sprite` or `size` in
+  it wins over the environment (`RETRO_HUD_CREATURE=0` still turns the
+  creature off).
+- Click menu: **size ▸** (tiny / big / tall) writes `size` for the
+  session; **reroll** writes a new random `seed` and shows `pin it with
+  RETRO_HUD_CREATURE_SEED=<n>`; **sprite ▸** offers the families while
+  the creature is on.
 
 ### Notes
 - The creature appears wherever the alien did, gauge-only mode included.
-  With `RETRO_HUD_ALIEN=0`, `RETRO_HUD_FRAME=0`, a short rule or a
-  degraded render, the head line is a blank line, so the HUD never
-  jumps between two and three lines.
+- Nothing can be drawn inside Claude Code's input box: the status line
+  owns only its own lines.
 - `MOOD_COLORS` now only colours the 2.x text-art sets.
 
 ## [v2.9.0] — 2026-10-22

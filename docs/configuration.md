@@ -7,10 +7,11 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | Env var | Default | Effect |
 |---------|---------|--------|
 | `RETRO_HUD_FRAME` | `1` | `0` disables the right-edge frame fill |
-| `RETRO_HUD_CREATURE` | `1` | the [pixel creature](../README.md#agent-presence) on a head line above the frame: the HUD is three lines. `0` restores the 2.x two-row HUD with the text-art alien, byte for byte |
+| `RETRO_HUD_CREATURE` | `tiny` | the [pixel creature](../README.md#agent-presence)'s size. `tiny`: braille dots in a 7-cell box on the top rule, two lines. `big`: half blocks straddling rows 1 and 2, two lines. `tall`: half blocks with a head line above the frame, three lines. `0` restores the 2.x two-row HUD with the text-art alien, byte for byte. Any other value is `tiny`. A `size` in the session's state file (the click menu's *size ▸*) wins over it, except that `0` is always off |
+| `RETRO_HUD_TICK_S` | `1` | seconds per animation frame: the creature's frame index is the time divided by this (a positive integer; anything else is `1`). It moves once per frame when Claude Code redraws often enough: set `statusLine.refreshInterval` to `1` for motion every second |
 | `RETRO_HUD_CREATURE_SEED` | session id | pins the creature's body and colour: any integer or string (strings are hashed with CRC-32). A `seed` in the session's state file (the click menu's *reroll*) wins over it |
-| `RETRO_HUD_CREATURE_COLOR` | from the seed | pins the body colour: `pink`, `green`, `purple`, `cyan`, `orange`, or a 256-colour index `0`–`255`. Amber and red still take over when a gauge is hot |
-| `RETRO_HUD_ALIEN` | `1` | `0` grounds the creature (or the 2.x alien) and with it all agent presence: no transcript reads, no files. The head line stays, blank |
+| `RETRO_HUD_CREATURE_COLOR` | from the seed | pins the body colour: `pink`, `green`, `purple`, `cyan`, `orange`, or a 256-colour index `0`–`255` (the `tiny` alien is green unless pinned). Amber and red still take over when a gauge is hot |
+| `RETRO_HUD_ALIEN` | `1` | `0` grounds the creature (or the 2.x alien) and with it all agent presence: no transcript reads, no files. With `tall` the head line stays, blank |
 | `RETRO_HUD_PRESENCE` | `1` | `0` restores the gauge-only creature: it reacts to the gauges but not to what the agent is doing |
 | `RETRO_HUD_SPRITE` | `alien` | creature family: `blob`, `beast`, `alien`, `bot` (the 2.x names `cat`, `robot`, `ghost` map to `beast`, `bot`, `blob`). With `RETRO_HUD_CREATURE=0`, the text-art set: `alien`, `cat`, `robot`, `ghost` |
 | `RETRO_HUD_AGENT_NAME` | — | name the agent that lives in this terminal; prefixes state bubbles (`Nova: ready`) |
@@ -81,11 +82,14 @@ to `~/.claude/settings.json`:
 ```
 
 `refreshInterval` re-renders every 5 seconds while idle so rate-limit
-countdowns tick, the creature patrols, and the frame re-fits within seconds of
+countdowns tick, the creature moves, and the frame re-fits within seconds of
 a terminal resize (Claude Code doesn't re-run the statusline on resize, so
 the interval is what picks up the new width). Agent presence **requires**
 it: without it the idle and asleep states never show and bubbles don't
 expire until the next message.
+Set it to `1` to watch the creature move every second (one frame per
+`RETRO_HUD_TICK_S`, default 1 s); at 5 you see the same motion sampled
+every 5 seconds.
 
 ### Presence hooks (manual)
 
