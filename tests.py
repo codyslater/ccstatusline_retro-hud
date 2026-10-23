@@ -2493,6 +2493,221 @@ class TestCreatureIdentity(unittest.TestCase):
         self.assertEqual(f(None), "alien")
 
 
+_CELL_RE = re.compile(r"(?:(?:\x1b\[[0-9;]*m)*[^\x1b]\x1b\[0m)*")
+MOODS_ALL = ("calm", "agitated", "red", "error", "working", "yours", "needs",
+             "idle", "asleep")
+
+
+def _has_color(s, n):
+    """Is 256-colour index n used as a foreground or background in s?"""
+    return re.search(r"[34]8;5;{}[;m]".format(n), s) is not None
+
+
+def _filled(cv):
+    return {(r, c) for r in range(4) for c in range(13) if cv[r][c]}
+
+
+class TestCreatureRender(unittest.TestCase):
+    """Every pose fits the fixed 13-cell box on both lines."""
+
+    def test_box_is_13_cells_on_both_lines_for_every_pose(self):
+        for fam in sl.FAMILIES:
+            for seed in range(0, 40, 3):
+                for mood in MOODS_ALL:
+                    for el in (None, 0, 3, 7, 12, 17, 25, 40, 4000):
+                        for now in (NOW, NOW + 10):
+                            for icon in ("", "!", "\U0001F6A9"):
+                                since = None if el is None else now - el
+                                p = sl.pose(seed, mood, since, now, 60, fam, icon=icon)
+                                head, rule = sl.render_box(p)
+                                label = (fam, seed, mood, el, now, icon)
+                                self.assertEqual(sl.vislen(head), 13, label)
+                                self.assertEqual(sl.vislen(rule), 13, label)
+                                self.assertTrue(_CELL_RE.fullmatch(head), label)
+                                self.assertTrue(_CELL_RE.fullmatch(rule), label)
+
+    def test_emoji_as_one_cell_keeps_the_box(self):
+        saved = sl._EMOJI_W
+        sl._EMOJI_W = 1
+        try:
+            p = sl.pose(1, "working", None, NOW, 60, icon="\U0001F6A9")
+            for line in sl.render_box(p):
+                self.assertEqual(sl.vislen(line), 13)
+        finally:
+            sl._EMOJI_W = saved
+
+    def test_half_blocks_carry_two_pixels(self):
+        p = sl.pose(0, "calm", None, NOW, 60, "alien", color=46)
+        head, rule = sl.render_box(p)
+        cv = p["canvas"]
+        for line, (top, bot) in ((head, (0, 1)), (rule, (2, 3))):
+            plain = sl.strip_ansi(line)
+            for c, ch in enumerate(plain):
+                t, b = cv[top][c], cv[bot][c]
+                want = "▀" if t else ("▄" if b else (" " if top == 0 else "─"))
+                self.assertEqual(ch, want, (top, c))
+        self.assertTrue(_has_color(head + rule, 46))   # the pinned body colour
+        self.assertTrue(_has_color(head, 255))          # white eyes
+
+    def test_steady_calm_canvas_is_the_grid(self):
+        g = sl.creature_grid(5, "beast")
+        cv = sl.pose(5, "calm", None, NOW, 60, "beast")["canvas"]
+        for r in range(4):
+            self.assertEqual([cv[r][c] for c in (0, 1, 11, 12)], [None] * 4)
+            for c in range(9):
+                self.assertEqual(bool(cv[r][c + 2]), bool(g[r][c]))
+                self.assertEqual(cv[r][c + 2] == "e", g[r][c] == "eye")
+
+
+class TestCreaturePoses(unittest.TestCase):
+    def cv(self, mood, since=None, now=NOW, seed=4, fam="alien", **kw):
+        return sl.pose(seed, mood, since, now, 60, fam, **kw)["canvas"]
+
+    def test_working_walks_its_legs(self):
+        a, b = self.cv("working", now=NOW), self.cv("working", now=NOW + 10)
+        self.assertEqual(a[:3], b[:3])
+        self.assertNotEqual(a[3], b[3])
+
+    def test_yours_raises_arms_and_jumps_once(self):
+        calm = self.cv("calm")
+        up = self.cv("yours")
+        self.assertGreater(sum(1 for v in up[1] if v), sum(1 for v in calm[1] if v))
+        self.assertEqual(up[2:], calm[2:])
+        self.assertFalse(any(self.cv("yours", since=NOW - 2)[3]))   # in the air
+        for el in (6, 12, 40):
+            self.assertTrue(any(self.cv("yours", since=NOW - el)[3]), el)
+
+    def test_needs_bounces_with_a_yellow_question_mark(self):
+        even, odd = self.cv("needs", now=NOW), self.cv("needs", now=NOW + 10)
+        self.assertTrue(any(even[3]))
+        self.assertFalse(any(odd[3]))
+        head, _ = sl.render_box(sl.pose(4, "needs", None, NOW, 60))
+        self.assertIn("?", sl.strip_ansi(head))
+        self.assertTrue(_has_color(head, 226))
+
+    def test_idle_squashes_and_blinks(self):
+        self.assertFalse(any(self.cv("idle")[0]))
+        eyes = [sum(row.count("e") for row in self.cv("idle", now=t)) for t in (NOW, NOW + 10)]
+        self.assertEqual(sorted(eyes), [0, 2])
+        head, _ = sl.render_box(sl.pose(4, "idle", None, NOW if eyes[0] else NOW + 10, 60))
+        self.assertTrue(_has_color(head, 244))
+
+    def test_asleep_melts_and_empties_the_head_line(self):
+        for fam in sl.FAMILIES:
+            for el in (None, 1, 7, 100):
+                for icon in ("", "!"):
+                    p = sl.pose(9, "asleep", None if el is None else NOW - el, NOW, 60, fam,
+                                icon=icon)
+                    self.assertFalse(any(p["canvas"][0]) or any(p["canvas"][1]))
+                    head, rule = sl.render_box(p)
+                    self.assertEqual(sl.strip_ansi(head), " " * 13, (fam, el))
+                    if icon:
+                        self.assertIn("!", sl.strip_ansi(rule))
+        calm, melt = self.cv("calm"), self.cv("asleep")
+        width = lambda row: max(c for c in range(13) if row[c]) - min(c for c in range(13) if row[c])
+        self.assertGreater(width(melt[3]), width(calm[3]))
+
+    def test_error_shakes_with_x_eyes(self):
+        a, b = self.cv("error", now=NOW), self.cv("error", now=NOW + 10)
+        self.assertNotEqual(a, b)
+        self.assertIn(b, ([[None, None] + r[:-2] for r in a], [r[2:] + [None, None] for r in a]))
+        head, _ = sl.render_box(sl.pose(4, "error", None, NOW, 60, color=46))
+        self.assertIn("x", sl.strip_ansi(head))
+        self.assertTrue(_has_color(head, 198))          # pink x on a green body
+        head, _ = sl.render_box(sl.pose(4, "error", None, NOW, 60, color=198))
+        self.assertTrue(_has_color(head, 231))          # white x when the body is pink
+
+    def test_red_zone_is_red_spins_once_then_shakes(self):
+        calm = self.cv("calm")
+        head, rule = sl.render_box(sl.pose(4, "red", None, NOW, 60, color=46))
+        self.assertTrue(_has_color(head + rule, 196))
+        self.assertFalse(_has_color(head + rule, 46))
+        self.assertEqual(self.cv("red", since=NOW - 12), calm[::-1])   # upside down
+        self.assertNotEqual(self.cv("red", since=NOW - 17), calm)       # edge-on
+        late = self.cv("red", since=NOW - 25)
+        self.assertIn(late, ([row[1:] + [None] for row in calm], [[None] + row[:-1] for row in calm]))
+
+    def test_agitated_is_amber_with_wide_eyes(self):
+        cv = self.cv("agitated")
+        self.assertEqual(sum(row.count("e") for row in cv), 4)
+        for c in range(13):
+            if cv[1][c] == "e":
+                self.assertEqual(cv[0][c], "e")
+        head, rule = sl.render_box(sl.pose(4, "agitated", None, NOW, 60, color=46))
+        self.assertTrue(_has_color(head + rule, 214))
+
+    def test_unknown_mood_is_calm(self):
+        self.assertEqual(self.cv("dancing"), self.cv("calm"))
+
+    def test_scatter_on_entry_then_reassemble(self):
+        for mood in MOODS_ALL:
+            if mood == "red":
+                continue  # spins for 20 s: its own test
+            steady = self.cv(mood, since=NOW - 4000)
+            for el, k in ((0, 6), (4, 6), (5, 3), (9, 3)):
+                a = self.cv(mood, since=NOW - el)
+                if mood == "yours" and el < 5:
+                    continue  # mid-jump: the pose itself differs
+                self.assertEqual(a, self.cv(mood, since=NOW - el), (mood, el))  # deterministic
+                self.assertEqual(len(_filled(a)), len(_filled(steady)), (mood, el))
+                rows = [r for r in range(4) if any(steady[r])]
+                room = sum(1 for r in rows for v in steady[r] if not v)
+                self.assertEqual(len(_filled(steady) - _filled(a)), min(k, room), (mood, el))
+                self.assertTrue(all(r in rows for r, _ in _filled(a)), (mood, el))
+            self.assertEqual(self.cv(mood, since=NOW - 10), steady, mood)
+            self.assertEqual(self.cv(mood, since=None), steady, mood)
+        # a different tick rolls a different scatter, the same tick never re-rolls
+        self.assertNotEqual(self.cv("calm", since=NOW - 1, now=NOW),
+                            self.cv("calm", since=NOW + 9, now=NOW + 10))
+
+
+class TestCreatureMovement(unittest.TestCase):
+    def pos(self, mood, since, now, cols=60):
+        return sl.pose(1, mood, since, now, cols)["pos"]
+
+    def test_moving_moods_patrol_inside_the_rule(self):
+        for mood, speed in (("calm", 1), ("agitated", 2), ("working", 3)):
+            spots = [self.pos(mood, None, NOW + 10 * i) for i in range(200)]
+            self.assertGreaterEqual(max(spots), 60 - 13 - 1)
+            self.assertLessEqual(max(spots), 60 - 13)
+            self.assertEqual(min(spots), 0)
+            steps = {abs(a - b) for a, b in zip(spots, spots[1:])}
+            self.assertEqual(max(steps), speed, mood)
+
+    def mid_rule(self):
+        # a moment when a calm cruise stands well away from the left end
+        return next(NOW + 10 * j for j in range(100) if self.pos("calm", None, NOW + 10 * j) >= 10)
+
+    def test_parked_moods_walk_left_and_stop(self):
+        for mood in ("needs", "idle", "asleep", "error"):
+            since = self.mid_rule()
+            walk = [self.pos(mood, since, since + 10 * i) for i in range(60)]
+            self.assertGreater(walk[0], 0, mood)
+            self.assertEqual(walk, sorted(walk, reverse=True), mood)
+            self.assertTrue(all(a - b <= 1 for a, b in zip(walk, walk[1:])), mood)
+            self.assertEqual(walk[-1], 0, mood)
+            self.assertEqual(self.pos(mood, None, NOW), 0, mood)
+
+    def test_yours_parks_30s_then_cruises(self):
+        since = self.mid_rule()
+        first = [self.pos("yours", since, since + d) for d in (0, 10, 20)]
+        self.assertEqual(first, sorted(first, reverse=True))
+        later = {self.pos("yours", since, since + d) for d in (40, 50, 60, 70)}
+        self.assertGreater(len(later), 1)
+
+    def test_red_holds_while_spinning_then_runs_at_4(self):
+        since = self.mid_rule()
+        spin = {self.pos("red", since, since + d) for d in (0, 5, 10, 15, 19)}
+        self.assertEqual(len(spin), 1)
+        run = [self.pos("red", since, since + 20 + 10 * i) for i in range(30)]
+        self.assertEqual(max(abs(a - b) for a, b in zip(run, run[1:])), 4)
+
+    def test_short_span_does_not_crash(self):
+        for cols in (13, 14, 17):
+            p = sl.pose(1, "working", None, NOW, cols)
+            self.assertTrue(0 <= p["pos"] <= max(cols - 13, 0))
+
+
 class TestHelpers(unittest.TestCase):
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")

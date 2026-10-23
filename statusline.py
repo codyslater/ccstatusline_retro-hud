@@ -1053,6 +1053,206 @@ def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS):
     return FALLBACK_GRID
 
 
+BOX_W = 13                # the creature's footprint: 9 body cells + 2 each side
+CREATURE_MIN_TRACK = BOX_W + 4
+# rule cells per 10s tick; 0 parks: walk to the left end of the rule and stay
+CREATURE_SPEEDS = {"calm": 1, "agitated": 2, "red": 4, "error": 0, "working": 3,
+                   "yours": 1, "needs": 0, "idle": 0, "asleep": 0}
+SCATTER_S = 10            # pixels scatter and reassemble this long after a mood starts
+JUMP_S = 5                # "yours" jumps this long after it starts
+SPIN_S = 20               # the red zone spins this long, then shakes
+EYE_COLORS = {"needs": 226, "idle": 244}  # else white (255)
+AMBER, RED_256, WHITE_256, ICON_256 = 214, 196, 255, 226
+
+
+def _rise(cv):
+    return cv[1:] + [[None] * BOX_W]
+
+
+def _shift(cv, dx):
+    if dx > 0:
+        return [[None] * dx + row[:-dx] for row in cv]
+    return [row[-dx:] + [None] * -dx for row in cv]
+
+
+def _span(row):
+    cs = [c for c, v in enumerate(row) if v]
+    return (cs[0], cs[-1]) if cs else None
+
+
+def _merge(a, b):
+    """Row b over row a: b's pixels win, a fills b's holes."""
+    return [y or x for x, y in zip(a, b)]
+
+
+def _widen(row):
+    s = _span(row)
+    if not s:
+        return row
+    lo, hi = max(s[0] - 1, 0), min(s[1] + 1, BOX_W - 1)
+    return ["b" if lo <= c <= hi else None for c in range(BOX_W)]
+
+
+def _scatter(cv, seed, tick, k):
+    """Move k pixels to empty cells of the box, within the rows the pose
+    occupies (so a melted creature keeps its head line empty). Seeded by (seed, tick, k): a refresh never re-rolls."""
+    rows = [r for r in range(4) if any(cv[r])]
+    if not rows:
+        return cv
+    rand = _mulberry32(seed ^ (tick * 2654435761) ^ (k * 40503))
+    full = [(r, c) for r in range(4) for c in range(BOX_W) if cv[r][c]]
+    empty = [(r, c) for r in range(rows[0], rows[-1] + 1) for c in range(BOX_W)
+             if not cv[r][c]]
+    out = [row[:] for row in cv]
+    for _ in range(min(k, len(full), len(empty))):
+        r, c = full.pop(int(rand() * len(full)))
+        nr, nc = empty.pop(int(rand() * len(empty)))
+        out[nr][nc], out[r][c] = out[r][c], None
+    return out
+
+
+def pose(seed, mood, mood_since, now, cols, family="alien", color=None, icon=""):
+    """The creature for this refresh, a pure function of its inputs.
+
+    `cols` is the length of the rule it walks; `mood_since` is when the
+    current mood began (None when unknown: steady poses only, no entry
+    tics, no scatter). Returns {"pos": box offset on the rule, "right":
+    walking right, "canvas": 4 pixel rows × 13 cells of None / "b" body /
+    "e" eye / "x" x-eye, "body", "eye", "x": 256-colour indices, "icon",
+    "icon_row": 0 head line / 1 rule, "ask": column of a yellow "?" or None}.
+    """
+    mood = mood if mood in CREATURE_SPEEDS else "calm"
+    tick = now // 10
+    el = None if mood_since is None else max(now - mood_since, 0)
+    grid = creature_grid(seed, family)
+    cv = [[None, None] + [{"body": "b", "eye": "e"}.get(v) for v in row] + [None, None]
+          for row in grid]
+
+    # ── position on the rule ──
+    span = max(cols - BOX_W, 0)
+
+    def cruise(t, speed):
+        if span == 0:
+            return 0, True
+        t = t * speed % (2 * span)
+        return (t if t <= span else 2 * span - t), t < span
+
+    speed = CREATURE_SPEEDS[mood]
+    if mood == "yours" and el is not None and el < WAVE_S:
+        speed = 0
+    if speed == 0:
+        if mood_since is None:
+            pos, right = 0, False
+        else:
+            start = int(mood_since) // 10
+            pos = max(cruise(start, 1)[0] - max(tick - start, 0), 0)
+            right = False
+    elif mood == "red" and el is not None and el < SPIN_S:
+        pos, right = cruise(int(mood_since) // 10, speed)
+    else:
+        pos, right = cruise(tick, speed)
+
+    # ── pose ──
+    body = creature_color(seed) if color is None else color
+    if mood == "agitated":
+        body = AMBER
+    elif mood == "red":
+        body = RED_256
+    eye = EYE_COLORS.get(mood, WHITE_256)
+    ask = None
+    if mood == "working" and tick % 2:  # walk cycle: legs step out
+        cv[3] = _shift([cv[3]], 1 if right else -1)[0]
+    elif mood == "yours":
+        s = _span(cv[2])
+        if s:
+            cv[1][s[0] - 1] = cv[1][s[1] + 1] = "b"  # arms up
+        if el is not None and el < JUMP_S:
+            cv = _rise(cv)
+    elif mood == "needs":
+        if tick % 2:
+            cv = _rise(cv)
+    elif mood == "idle":
+        cv = [[None] * BOX_W, _merge(cv[0], cv[1]), cv[2], cv[3]]
+        if tick % 2:  # eyes shut on alternate ticks
+            cv = [["b" if v == "e" else v for v in row] for row in cv]
+    elif mood == "asleep":
+        top = ["b" if v else None for v in _merge(cv[0], cv[1])]
+        cv = [[None] * BOX_W, [None] * BOX_W, _widen(top), _widen(_merge(cv[2], cv[3]))]
+    elif mood == "error":
+        cv = [["x" if v == "e" else v for v in row] for row in cv]
+        cv = _shift(cv, 1 if tick % 2 else -1)
+    elif mood == "red":
+        if el is not None and el < SPIN_S:
+            phase = el * 4 // SPIN_S  # 0 face, 1 edge-on, 2 upside down, 3 edge-on
+            if phase == 2:
+                cv = cv[::-1]
+            elif phase in (1, 3):  # edge-on: squeeze toward the middle column
+                thin = [[None] * BOX_W for _ in range(4)]
+                for r in range(4):
+                    for c in range(BOX_W):
+                        if cv[r][c]:
+                            thin[r][6 + int((c - 6) / 2)] = cv[r][c]
+                cv = thin
+        else:
+            cv = _shift(cv, 1 if tick % 2 else -1)
+    elif mood == "agitated":
+        for r in range(1, 4):
+            for c in range(BOX_W):
+                if cv[r][c] == "e":
+                    cv[r - 1][c] = "e"  # wide eyes
+    if el is not None and el < SCATTER_S:
+        cv = _scatter(cv, seed, tick, 6 if el < SCATTER_S / 2 else 3)
+    if mood == "needs":
+        s = _span(_merge(cv[0], cv[1]))
+        ask = min((s[1] if s else 10) + 1, BOX_W - 1)
+    return {"pos": pos, "right": right, "canvas": cv, "body": body, "eye": eye,
+            "x": 231 if body == 198 else 198, "icon": icon or "",
+            "icon_row": 1 if mood == "asleep" else 0, "ask": ask}
+
+
+def _sgr(fg=None, bg=None):
+    return "\033[{}m".format(";".join(
+        ([] if fg is None else ["38;5;{}".format(fg)]) +
+        ([] if bg is None else ["48;5;{}".format(bg)])))
+
+
+def render_box(p):
+    """(head line cells, rule cells) for a pose: two strings of visible
+    width 13. One text cell holds two pixel rows (▀ top / ▄ bottom, fg
+    and bg as their colours); every cell ends with an SGR reset. Empty
+    cells are spaces on the head line and rule ─ on row 1."""
+    cv = p["canvas"]
+
+    def colour(tok):
+        return p["eye"] if tok == "e" else p["body"]
+
+    lines = []
+    for row in (0, 1):
+        cells = []
+        for c in range(BOX_W):
+            t, b = cv[2 * row][c], cv[2 * row + 1][c]
+            if "x" in (t, b):
+                cells.append("\033[1m" + _sgr(p["x"], p["body"]) + "x" + R)
+            elif t and b:
+                cells.append(_sgr(colour(t), colour(b)) + "▀" + R)
+            elif t:
+                cells.append(_sgr(colour(t)) + "▀" + R)
+            elif b:
+                cells.append(_sgr(colour(b)) + "▄" + R)
+            else:
+                cells.append(" " + R if row == 0 else RULE + "─" + R)
+        lines.append(cells)
+    mark = lambda ch: "\033[1m" + _sgr(ICON_256) + ch + R
+    if p.get("ask") is not None:
+        lines[0][p["ask"]] = mark("?")
+    icon = p.get("icon") or ""
+    if icon:
+        w = vwidth(icon)
+        row = lines[p.get("icon_row", 0)]
+        row[BOX_W - w:] = [mark(icon)]
+    return "".join(lines[0]), "".join(lines[1])
+
+
 # ── row assembly ──
 def _join(prefix, segs):
     return prefix + SEP.join(s for s in segs if s)
