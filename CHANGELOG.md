@@ -41,7 +41,8 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   and a popup shows the session: state and how long, model and effort,
   context %, worst limit %, cost and duration, lines, directory, plus one
   tip (a different one every ten minutes). Any key closes it; `m` opens
-  the agent menu. The creature now links to `retro-hud://card`; the
+  the agent menu, and the agent menu's first item opens the card (for a
+  terminal too narrow to show the creature). The creature now links to `retro-hud://card`; the
   session-name segment (`◈ name`, row 1) carries the `retro-hud://agent`
   menu link. The state file gains the card's facts (`model`, `effort`,
   `dur_s`, `lines_add`, `lines_del`, `dir`). A

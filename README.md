@@ -298,7 +298,8 @@ creature (not its bubble) is a link to its **status card**
 model and effort, context %, worst limit %, cost and duration, lines and
 directory, and one tip (a different one every ten minutes); any key
 closes it, `m` opens the menu below. The session-name segment (`◈ name`,
-row 1) is the link to that small menu: **wave** (appends a
+row 1) is the link to that small menu: **status card** (the popup
+above, for terminals too narrow to show the creature), **wave** (appends a
 10s `wave` event, so it waves back), **quiet 1h** (sets `mute_until` an
 hour ahead: no bubbles until then), **sprite ▸** (blob / beast / alien /
 bot writes `sprite` to the state file; *default* removes it and the env
@@ -334,7 +335,7 @@ a slash command.
 | `+N/-M` lines | read-only popup: `git diff --stat`, then the diff in `less` |
 | rate-limit gauges | opens your usage page (`RETRO_HUD_USAGE_URL`) in the browser |
 | the creature | its status card: state, model, effort, context, limit, cost, duration, lines, dir, a tip; `m` opens the menu (see [Agent presence](#agent-presence)) |
-| session name (`◈ name`) | wave · quiet 1h · sprite ▸ · size ▸ · reroll · status |
+| session name (`◈ name`) | status card · wave · quiet 1h · sprite ▸ · size ▸ · reroll · status |
 
 The branch badge and PR number keep their GitHub links.
 

@@ -691,7 +691,7 @@ elif cmd[:1] == ["display-popup"]:
     m = re.fullmatch(r"bash '([^']+)'", cmd[-1])        # keep the popup's files: the handler removes them after
     if m and os.path.exists(m.group(1)):
         shutil.copy(m.group(1), os.path.join(os.environ["HOME"], "popup.runner"))
-        card = re.search(r"^head -c -1 '([^']+)'$", open(m.group(1)).read(), re.M)
+        card = re.search(r"cat '([^']+)'", open(m.group(1)).read())
         if card and os.path.exists(card.group(1)):
             shutil.copy(card.group(1), os.path.join(os.environ["HOME"], "popup.card"))
     if os.environ.get("FAKE_TMUX_POPUP_RC"):
@@ -1242,10 +1242,12 @@ class TestHandlerAgent(ShellHarness):
         client, title, items = self.menu()
         self.assertEqual(client, "/dev/pts/3")
         self.assertIn("agent", title)
-        self.assertEqual([i[0] for i in items], ["wave", "quiet 1h", "sprite ▸", "status"])
+        self.assertEqual([i[0] for i in items], ["status card", "wave", "quiet 1h", "sprite ▸", "status"])
+        self.assertEqual(items[0][1:], ("c", "run-shell -b \"'{}' 'retro-hud://card?pane=%257'\"".format(HANDLER)))
         prefix = "run-shell -b \"'{}' do agent '%7' ".format(HANDLER)
-        self.assertEqual([i[2] for i in items],
+        self.assertEqual([i[2] for i in items[1:]],
                          [prefix + sub + '"' for sub in ("wave", "quiet", "sprites", "status")])
+        self.assertEqual(items[2][1], "h", "quiet is not on q: q closes a tmux menu")
 
     def test_menu_title_names_the_agent_from_config(self):
         self.map_pane()
@@ -1363,11 +1365,11 @@ class TestHandlerAgent(ShellHarness):
         self.run_handler(self.url("agent"))
         _, _, items = self.menu()
         self.assertEqual([i[0] for i in items],
-                         ["wave", "quiet 1h", "sprite ▸", "size ▸", "reroll", "status"])
-        self.assertEqual((items[3][1], items[4][1]), ("z", "r"))
+                         ["status card", "wave", "quiet 1h", "sprite ▸", "size ▸", "reroll", "status"])
+        self.assertEqual((items[4][1], items[5][1]), ("z", "r"))
         prefix = "run-shell -b \"'{}' do agent '%7' ".format(HANDLER)
-        self.assertEqual(items[3][2], prefix + 'sizes"')
-        self.assertEqual(items[4][2], prefix + 'reroll"')
+        self.assertEqual(items[4][2], prefix + 'sizes"')
+        self.assertEqual(items[5][2], prefix + 'reroll"')
 
     def test_creature_sprite_submenu_lists_families(self):
         self.map_pane()
@@ -1556,7 +1558,7 @@ class TestHandlerCard(TestHandlerAgent):
         self.assertIn(" Nova ", pops[0])
         client, title, items = self.menu()          # m: the menu opens once the popup is closed
         self.assertEqual(title, "Nova")
-        self.assertEqual(items[0][0], "wave")
+        self.assertEqual([i[0] for i in items][:2], ["status card", "wave"])
         self.assertTrue(all(c[:2] == ["-S", "/tmp/tmux-1000/default"] for c in self.log("tmux")), self.log("tmux"))
 
     def test_card_needs_a_mapped_claude_pane(self):

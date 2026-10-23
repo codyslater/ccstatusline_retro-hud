@@ -431,12 +431,17 @@ agent_target() {
 creature_on() { [ "$(state_py creature 2>/dev/null)" = on ]; }
 
 agent_menu() {
-    local pane=$1 extra=()
+    local pane=$1 extra=() card_url
     if creature_on; then
         extra=("size ▸" z "$(menu_cmd agent "$pane" sizes)"
                "reroll" r "$(menu_cmd agent "$pane" reroll)")
     fi
+    # the card by its public URL (a local extension may answer it), so it is reachable from
+    # this menu when a narrow terminal has dropped the creature itself
+    card_url="retro-hud://card?pane=%25${pane#%}"
+    [ -z "$SOCK" ] || card_url+="&sock=$SOCK"
     show_menu "$AGENT_NAME" \
+        "status card" c "run-shell -b \"'$SELF' '$card_url'\"" \
         "wave" w "$(menu_cmd agent "$pane" wave)" \
         "quiet 1h" h "$(menu_cmd agent "$pane" quiet)" \
         "sprite ▸" s "$(menu_cmd agent "$pane" sprites)" \
@@ -619,9 +624,9 @@ show_card() {  # pane; after agent_target
         printf '\n\033[2mtip: %s\033[0m\n' "$tip"
         printf '\033[2m%s\033[0m\n' "any key closes · m: menu"
     } >"$file"
-    # head -c -1: no final newline, so the cursor stays on the last line and the popup, sized
-    # to the text, does not scroll its first line away
-    printf '#!/bin/bash\nhead -c -1 %s\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' \
+    # printed without its final newline, so the cursor stays on the last line and the popup,
+    # sized to the text, does not scroll its first line away ($(…) strips it; portable)
+    printf '#!/bin/bash\nprintf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' \
         "'$file'" >"$runner"
     w=$(( $(vis_width <"$file") + 4 ))
     h=$(( $(wc -l <"$file") + 2 ))
