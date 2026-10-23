@@ -192,7 +192,8 @@ function of the seed and the clock, so a refresh never re-rolls it. It
 draws over the cells it passes and leaves them as they were: colours and
 links run on underneath, a wide character it half covers is hidden whole,
 the frame corners and leads are never covered and no row changes width.
-While it is out it is not a link (the click menu waits until it is home).
+While it is out it is not the agent link (the click menu waits until it
+is home); a cell it covers inside another link stays part of that link.
 `tall` keeps it home; `RETRO_HUD_EXCURSIONS=0` turns excursions off.
 
 **What it reacts to**, highest priority first. The body keeps its colour

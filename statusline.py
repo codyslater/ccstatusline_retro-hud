@@ -1760,7 +1760,8 @@ def _corner_x(s, geo):  # right up against the corner
 # when it is due back), "rule2" (row 2's first free rule column), "seat"
 # ((column, width) of row 2's duration/cost field, or None).
 def _ex_stretch(sp, phase, n, geo, sit):
-    ends = n >= 3 and (phase == 0 or (n >= 5 and phase == n - 1))
+    # 1 frame growing, 2–3 at double width, then (n >= 4) one shrinking
+    ends = n >= 3 and (phase == 0 or (n >= 4 and phase == n - 1))
     s = sp["half" if ends else "wide"]
     return _put(s, min(geo["home"], _corner_x(s, geo)), geo)
 
@@ -2427,10 +2428,11 @@ def render(data, cols, now):
         except Exception:  # decoration again: a blank head line, a plain rule
             head, top = R, _frame(row1, cols, "┐", frame_on)
         return [head, top, _frame(row2, cols, "┘", frame_on)]
+    look = out = None
     if size in ("tiny", "big"):
         try:
-            out = excursion_rows(size, row1, row2, cols, frame_on, alien_pct, now, pres,
-                                 creature_look(data, pres))
+            look = creature_look(data, pres)
+            out = excursion_rows(size, row1, row2, cols, frame_on, alien_pct, now, pres, look)
         except Exception:  # decoration: the creature stays home
             out = None
         if out:
@@ -2438,13 +2440,13 @@ def render(data, cols, now):
     if size == "big":
         try:
             return list(_frame_big(row1, row2, cols, frame_on, alien_pct, now, pres,
-                                   creature_look(data, pres), action))
+                                   look or creature_look(data, pres), action))
         except Exception:  # decoration: the plain frame
             return [_frame(row1, cols, "┐", frame_on), _frame(row2, cols, "┘", frame_on)]
     if size == "tiny":
         try:
             top = _frame_tiny(row1, cols, frame_on, alien_pct, now, pres,
-                              creature_look(data, pres), action)
+                              look or creature_look(data, pres), action)
         except Exception:  # decoration: the plain frame
             top = _frame(row1, cols, "┐", frame_on)
         return [top, _frame(row2, cols, "┘", frame_on)]
