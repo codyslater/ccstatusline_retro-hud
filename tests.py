@@ -1615,6 +1615,35 @@ class TestHandlerCard(TestHandlerAgent):
         self.run_handler(self.url("card"), FAKE_TMUX_PANE_CMD="vim")
         self.assertEqual(self.tmux_calls("display-popup"), [])
 
+    def test_a_second_right_click_closes_the_popup_that_is_up(self):
+        self.map_pane()
+        menu_file = os.path.join(self.tmp, "m.tmux")
+        mark = os.path.join(self.home, ".cache", "retro-hud", "popup-_dev_pts_3")
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        with open(mark, "w") as f:
+            f.write("")
+        p = self.run_handler(self.url("card"), RETRO_HUD_MENU_FILE=menu_file, RETRO_HUD_CLIENT="/dev/pts/3")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        with open(menu_file) as f:
+            self.assertEqual(f.read(), "display-popup -C -c '/dev/pts/3'\n")
+        self.assertFalse(os.path.exists(mark))                            # consumed
+        self.assertEqual(self.tmux_calls("display"), [])                  # nothing else ran
+        # a stale marker is ignored and cleared: the cloud opens as usual
+        with open(mark, "w") as f:
+            f.write("")
+        os.utime(mark, (0, 0))
+        p = self.run_handler(self.url("card"), RETRO_HUD_MENU_FILE=menu_file, RETRO_HUD_CLIENT="/dev/pts/3")
+        with open(menu_file) as f:
+            line = f.read()
+        self.assertTrue(line.startswith("display-popup -c '/dev/pts/3' -x M"), line)
+        self.assertFalse(os.path.exists(mark))
+        # every popup runner keeps the marker while it runs
+        runner_path = re.search(r"cloud\.[A-Za-z0-9]+\.sh", line).group(0)
+        with open(os.path.join(self.home, ".cache", "retro-hud", runner_path)) as f:
+            runner = f.read()
+        self.assertIn("touch '" + mark + "'", runner)
+        self.assertIn("trap 'rm -f '" + "\\''" + mark + "'\\''" + "' EXIT", runner)
+
     def test_card_inside_the_binding_is_a_speech_cloud_at_the_pointer(self):
         self.map_pane()
         self.put_state({"state": "working", "since": 1700000000, "ctx_pct": 32, "limit_pct": 19, "cost": 160.7,

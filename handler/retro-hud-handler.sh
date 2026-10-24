@@ -90,6 +90,30 @@ if [ -n "${RETRO_HUD_CLIENT:-}" ]; then
     fi
 fi
 
+# A right-click while one of our popups (cloud, card, diff) is up closes it
+# instead of opening another (CS 20261023: "not everything closes back with
+# the same click that opened it"). Each popup's command keeps a marker file
+# for its client while it runs; inside the binding the handler then writes
+# `display-popup -C` for the binding to run. A stale marker (older than an
+# hour) is ignored. A local extension's popups keep the same marker.
+POPUP_MARK=""
+if [ -n "$BOUND_CLIENT" ]; then
+    POPUP_MARK="$LOG_DIR/popup-${BOUND_CLIENT//\//_}"
+    if [ -n "$MENU_FILE" ] && [ -f "$POPUP_MARK" ]; then
+        if [ -n "$(find "$POPUP_MARK" -mmin -60 2>/dev/null)" ]; then
+            printf "display-popup -C -c '%s'\n" "$BOUND_CLIENT" >"$MENU_FILE.tmp" && mv -f "$MENU_FILE.tmp" "$MENU_FILE"
+            rm -f "$POPUP_MARK"
+            log "popup up on $BOUND_CLIENT: this click closes it"
+            exit 0
+        fi
+        rm -f "$POPUP_MARK"
+    fi
+fi
+popup_guard() {  # the lines a popup's runner starts with: keep the marker while it runs
+    [ -n "$POPUP_MARK" ] || return 0
+    printf 'touch %s\ntrap %s EXIT\n' "$(tmq "$POPUP_MARK")" "$(tmq "rm -f '$POPUP_MARK'")"
+}
+
 if [ -f "$LOCAL_EXT" ]; then
     # It sees "$@"; returning (with any status) falls through to the
     # built-in actions, `exit` ends the click.
@@ -636,8 +660,8 @@ show_card() {  # pane; after agent_target
     } >"$file"
     # printed without its final newline, so the cursor stays on the last line and the popup,
     # sized to the text, does not scroll its first line away ($(…) strips it; portable)
-    printf '#!/bin/bash\nprintf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' \
-        "'$file'" >"$runner"
+    { printf '#!/bin/bash\n'; popup_guard
+      printf 'printf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' "'$file'"; } >"$runner"
     w=$(( $(vis_width <"$file") + 4 ))
     h=$(( $(wc -l <"$file") + 2 ))
     read -r cols rows < <(tm display -p -c "$CLIENT" '#{client_width} #{client_height}' 2>/dev/null) || cols="" rows=""
@@ -681,8 +705,8 @@ show_cloud() {  # pane; after agent_target
         printf '\033[2m%s\033[0m\n' "m menu · c card · any key closes"
     } >"$file"
     url="retro-hud://card?pane=%25${pane#%}${SOCK:+&sock=$SOCK}"
-    printf '#!/bin/bash\nprintf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\nrm -f %s %s\n' \
-        "'$file'" "'$file'" "'$runner'" >"$runner"
+    { printf '#!/bin/bash\n'; popup_guard
+      printf 'printf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\nrm -f %s %s\n' "'$file'" "'$file'" "'$runner'"; } >"$runner"
     # the popup must be gone before a menu or another popup may open: a short delay
     printf '[ "$k" = m ] && exec tmux run-shell -b -d 0.3 %s\n' \
         "$(tmq "'$SELF' '${url/card?/agent?}'")" >>"$runner"
@@ -759,8 +783,10 @@ case $ACTION in
         # pager) are switched off, and less runs in secure mode.
         git_safe="GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false"
         git_safe+=" -c diff.external= -c core.pager= --no-pager diff --no-ext-diff --no-textconv"
+        guard=""
+        [ -z "$POPUP_MARK" ] || guard="touch $(tmq "$POPUP_MARK"); trap $(tmq "rm -f '$POPUP_MARK'") EXIT; "
         tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) " -E \
-            "{ $git_safe --stat --color=always; echo; $git_safe --color=always; } 2>&1 | LESSSECURE=1 less -R" ||
+            "$guard{ $git_safe --stat --color=always; echo; $git_safe --color=always; } 2>&1 | LESSSECURE=1 less -R" ||
             log "display-popup failed"
         ;;
     # ── agent action: BEGIN ──
