@@ -4,6 +4,24 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [v3.1.2] — 2026-10-24
+
+### Fixed
+- **The return button works with a strict handler too**: `retro-hud://back`
+  (and `home`) carry the pane and socket like every action; a handler that
+  accepted only the bare form rejected the click.
+- **No hidden link beside the buttons.** The blank cell under the `⌂` (or
+  above the `↩`) is plain; it used to carry the link and show a hover
+  tooltip over nothing.
+- **The `↩` means the session you were in before you came home**, whatever
+  brought you home through the handler (`⌂`, the session list, the
+  needs-you key, `switch`); a record older than 12 h is ignored, so a fresh
+  start on home shows nothing. The list's items re-enter the handler.
+
+### Changed
+- README: one GIF at the top with the default look, and a fuller demo
+  staged on an orbit-propagator project.
+
 ## [v3.1.1] — 2026-10-24
 
 ### Fixed
