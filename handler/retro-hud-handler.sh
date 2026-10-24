@@ -270,7 +270,7 @@ send_slash() {  # pane, command, [arg]
 # session a pane shows in <cache>/pane-<N>.sid (pane %N) while click
 # actions are on, so the session is found from the pane, never the URL.
 SPRITE_SETS="alien cat robot ghost"
-FAMILIES="blob beast alien bot"  # the pixel creature's families
+FAMILIES="blob beast alien bot robot"  # the pixel creature's families
 SIZES="tiny big tall"            # the pixel creature's sizes
 QUIET_S=3600
 WAVE_TTL=10

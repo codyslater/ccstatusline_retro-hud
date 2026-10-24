@@ -14,7 +14,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_CREATURE_COLOR` | from the seed | pins the body colour: `pink`, `green`, `purple`, `cyan`, `orange`, or a 256-colour index `0`–`255` (the `tiny` alien is green unless pinned). Amber and red still take over when a gauge is hot |
 | `RETRO_HUD_ALIEN` | `1` | `0` grounds the creature (or the 2.x alien) and with it all agent presence: no transcript reads, no files. With `tall` the head line stays, blank |
 | `RETRO_HUD_PRESENCE` | `1` | `0` restores the gauge-only creature: it reacts to the gauges but not to what the agent is doing |
-| `RETRO_HUD_SPRITE` | `alien` | creature family: `blob`, `beast`, `alien`, `bot` (the 2.x names `cat`, `robot`, `ghost` map to `beast`, `bot`, `blob`). With `RETRO_HUD_CREATURE=0`, the text-art set: `alien`, `cat`, `robot`, `ghost` |
+| `RETRO_HUD_SPRITE` | `alien` | creature family: `blob`, `beast`, `alien`, `bot`, `robot` (the 2.x names `cat` and `ghost` map to `beast` and `blob`; `robot` is its own family since 3.1). With `RETRO_HUD_CREATURE=0`, the text-art set: `alien`, `cat`, `robot`, `ghost` |
 | `RETRO_HUD_AGENT_NAME` | — | name the agent that lives in this terminal; prefixes state bubbles (`Nova: ready`) |
 | `RETRO_HUD_BUBBLES` | `alerts` | what the creature may say: `alerts` = only `need you` / `compact?` / `limit soon` plus events-channel messages; `all` = also `ready`, `hm.`, `z`/`zZ` and idle quips; `off` = nothing |
 | `RETRO_HUD_QUIPS` | `1` | `0` turns off the rare idle quips |

@@ -98,6 +98,11 @@ tool sends it a message; `RETRO_HUD_BUBBLES=all` adds the narration
 | `tall` | the same half-block body with its upper half on a head line printed above the frame | three lines |
 | `0` | the 2.x text-art alien (`/o.o\`) and its sprite sets, byte for byte | two lines |
 
+The `robot` family is eight dots tall, so at `big` and `tall` it draws in
+braille rather than half blocks: its head on the upper text row, its body
+and legs on the lower, in a 9-cell box that walks in half cells. It hides
+on the same short rules as the others.
+
 ```
 tiny   ┌─[ Fable 5 ] // 📂 my-project ──────────⠈⢎⣹⣉⠎──────────────────────┐
        └─█▋   42% // $4.20 ──────────────────────────────────────────────┘
@@ -145,9 +150,10 @@ and `RETRO_HUD_CREATURE_COLOR` pins it (one of those names, `orange`, or a
 | `beast` | wide shoulders, ears, two legs |
 | `blob` | round, a wide base instead of legs |
 | `bot` | square, eyes far apart, two legs |
+| `robot` | built from parts the seed picks: antenna (one, two, a dish, ears or a flat top), square eyes, a visor or dots, a neck, arms down, out, up or none, a chest panel or lights, two legs, treads or a pole. 12×8 dots: at `big` and `tall` it draws in braille on two text rows (a 9-cell box); at `tiny` it is a 4-dot brick |
 
-The 2.x sprite names still work: `cat` → beast, `robot` → bot,
-`ghost` → blob.
+The 2.x sprite names still work: `cat` → beast, `ghost` → blob. `robot`
+is its own family since 3.1 (it was bot's alias before).
 
 **It is alive.** Every frame is a pure function of the seed, the mood,
 when the mood began and the clock, so a refresh never re-rolls it. The
@@ -302,7 +308,7 @@ row 1) is the link to that small menu: **status card** (the popup
 above, for terminals too narrow to show the creature), **wave** (appends a
 10s `wave` event, so it waves back), **quiet 1h** (sets `mute_until` an
 hour ahead: no bubbles until then), **sprite ▸** (blob / beast / alien /
-bot writes `sprite` to the state file; *default* removes it and the env
+bot / robot writes `sprite` to the state file; *default* removes it and the env
 choice applies again; with the creature off it offers the 2.x sets
 alien / cat / robot / ghost), **size ▸** (tiny / big / tall writes `size`
 to the state file; *default* removes it), **reroll** (writes a new random `seed` for

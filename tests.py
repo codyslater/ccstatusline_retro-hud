@@ -1376,7 +1376,7 @@ class TestHandlerAgent(ShellHarness):
         self.put_state({"creature": "bot"})
         self.run_handler("do", "agent", "%7", "sprites")
         _, _, items = self.menu()
-        self.assertEqual([i[0] for i in items], ["blob", "beast", "alien", "bot", "default"])
+        self.assertEqual([i[0] for i in items], ["blob", "beast", "alien", "bot", "robot", "default"])
 
     def test_reroll_writes_a_seed_and_says_how_to_pin_it(self):
         self.map_pane()
@@ -2820,7 +2820,7 @@ class TestCreatureGrid(unittest.TestCase):
         self.assertGreaterEqual(sum(1 for v in g[3] if v), 2, label)
 
     def test_every_family_and_seed_is_well_formed(self):
-        self.assertEqual(sl.FAMILIES, ("blob", "beast", "alien", "bot"))
+        self.assertEqual(sl.FAMILIES, ("blob", "beast", "alien", "bot", "robot"))
         for fam in sl.FAMILIES:
             for seed in self.SEEDS:
                 self.check(sl.creature_grid(seed, fam), (fam, seed))
@@ -2853,6 +2853,94 @@ class TestCreatureGrid(unittest.TestCase):
             self.assertEqual(legs(sl.creature_grid(seed, "alien")[3]), 3, seed)
             self.assertEqual(legs(sl.creature_grid(seed, "beast")[3]), 2, seed)
             self.assertEqual(legs(sl.creature_grid(seed, "bot")[3]), 2, seed)
+            self.assertEqual(legs(sl.creature_grid(seed, "robot")[3]), 2, seed)
+
+
+class TestRobotGrid(unittest.TestCase):
+    """The robot family's 12×8 body: parts picked by the seed, mirrored,
+    one piece, eyes on the eye row only."""
+    PARTS = {"antenna": ("one", "two", "dish", "ears", "flat"), "eyes": ("squares", "visor", "dots"),
+             "neck": (True, False), "arms": ("down", "out", "up", "none"),
+             "chest": ("panel", "lights", "plain"), "legs": ("legs", "treads", "pole"),
+             "head": (6, 8, 10), "torso": (8, 10, 12)}
+
+    def check(self, g, label):
+        self.assertEqual(len(g), sl.ROBOT_ROWS, label)
+        for row in g:
+            self.assertEqual(len(row), sl.ROBOT_COLS, label)
+            self.assertTrue(all(v in (None, "body", "eye", "hole") for v in row), label)
+            self.assertEqual(list(row), list(reversed(row)), label)  # mirrored
+        self.assertTrue(_connected(g), label)
+        eyes = sorted((r, c) for r in range(sl.ROBOT_ROWS) for c in range(sl.ROBOT_COLS)
+                      if g[r][c] == "eye")
+        self.assertTrue(eyes, label)
+        self.assertEqual({r for r, _ in eyes}, {2}, label)            # the eye row
+        self.assertTrue(all(g[1][c] == "body" for _, c in eyes), label)  # under the head top
+        holes = [(r, c) for r in range(sl.ROBOT_ROWS) for c in range(sl.ROBOT_COLS)
+                 if g[r][c] == "hole"]
+        self.assertTrue(all(r == 5 for r, _ in holes), label)           # chest only
+        for r in (6, 7):                                                 # legs, treads or a pole
+            self.assertGreaterEqual(sum(1 for v in g[r] if v == "body"), 2, label)
+        self.assertGreaterEqual(sum(1 for v in g[1] if v == "body"), 6, label)  # a head
+
+    def test_every_seed_is_well_formed(self):
+        for seed in TestCreatureGrid.SEEDS:
+            self.check(sl.robot_grid(seed), seed)
+
+    def test_parts_from_the_seed_cover_every_option(self):
+        seen = {k: set() for k in self.PARTS}
+        for seed in range(300):
+            parts = sl.robot_parts(seed)
+            self.assertEqual(set(parts), set(self.PARTS), seed)
+            for k, v in parts.items():
+                self.assertIn(v, self.PARTS[k], (seed, k))
+                seen[k].add(v)
+            self.assertEqual(sl.robot_parts(seed), parts)
+        for k, opts in self.PARTS.items():
+            self.assertEqual(seen[k], set(opts), k)
+
+    def test_parts_show_in_the_body(self):
+        for seed in range(120):
+            g, parts = sl.robot_grid(seed), sl.robot_parts(seed)
+            label = (seed, parts)
+            eyes = [c for c in range(sl.ROBOT_COLS) if g[2][c] == "eye"]
+            if parts["eyes"] == "visor":
+                self.assertEqual(eyes, list(range(eyes[0], eyes[-1] + 1)), label)  # one slot
+                self.assertEqual(len(eyes), parts["head"] - 2, label)
+            else:
+                self.assertEqual(len(eyes), 4 if parts["eyes"] == "squares" else 2, label)
+            self.assertEqual(sum(1 for v in g[1] if v), parts["head"], label)
+            self.assertEqual(sum(1 for v in g[4] if v) >= parts["torso"], True, label)
+            if parts["neck"]:  # a neck, plus the arm tips beside it when raised
+                self.assertEqual(sum(1 for v in g[3] if v), 2 + (2 if parts["arms"] == "up" else 0),
+                                 label)
+            if parts["legs"] == "treads":
+                self.assertEqual(sum(1 for v in g[7] if v), sl.ROBOT_COLS, label)
+            elif parts["legs"] == "pole":
+                self.assertEqual(sum(1 for v in g[6] if v), 2, label)
+            else:
+                self.assertEqual(sum(1 for v in g[6] if v), 4, label)
+            self.assertEqual(bool([c for c in range(sl.ROBOT_COLS) if g[5][c] == "hole"]),
+                             parts["chest"] != "plain", label)
+            if parts["arms"] == "none":
+                self.assertEqual([sum(1 for v in row if v) for row in g[4:6]],
+                                 [parts["torso"]] * 2, label)
+            else:
+                self.assertTrue(any(g[r][0] for r in (3, 4, 5)), label)  # an arm reaches the edge
+
+    def test_deterministic_and_varied(self):
+        self.assertEqual(sl.robot_grid(7), sl.robot_grid(7))
+        self.assertGreater(len({sl.robot_grid(s) for s in range(200)}), 60)
+
+    def test_tiny_and_half_block_bodies_are_a_four_row_brick(self):
+        # at 4 rows (tiny, and the half-block pose) the family is a bot-shaped brick
+        for seed in range(40):
+            for width in (9, 10):
+                g = sl.creature_grid(seed, "robot", width=width)
+                TestCreatureGrid.check(self, g, (seed, width)) if width == 9 else \
+                    TestTinyGrid.check(self, g, (seed, width))
+        self.assertEqual(sl.creature_family("robot"), "robot")
+        self.assertEqual(sl.creature_family("bot"), "bot")
 
 
 class TestTinyGrid(unittest.TestCase):
@@ -2953,7 +3041,7 @@ class TestCreatureIdentity(unittest.TestCase):
         for name in sl.FAMILIES:
             self.assertEqual(f(name), name)
         self.assertEqual((f("alien"), f("cat"), f("robot"), f("ghost")),
-                         ("alien", "beast", "bot", "blob"))
+                         ("alien", "beast", "robot", "blob"))  # robot is its own family since 3.1
         self.assertEqual(f("dragon"), "alien")
         self.assertEqual(f(None), "alien")
 
@@ -3476,7 +3564,7 @@ class TestCreatureHud(CreatureCase):
         self.assertEqual(self.rows(NOW + 100)[0], base[0])
         os.environ["RETRO_HUD_SPRITE"] = "robot"
         self.rows(NOW + 100)
-        self.assertEqual(self.state_file()["creature"], "bot")
+        self.assertEqual(self.state_file()["creature"], "robot")
         self.put_state(sprite="ghost")
         self.rows(NOW + 100)
         self.assertEqual(self.state_file()["creature"], "blob")
@@ -3813,6 +3901,188 @@ class TestTinyPose(unittest.TestCase):
 TestTinyPose._real_flags = sl.alive_flags
 
 
+class TestRobotPose(unittest.TestCase):
+    """The robot at big and tall: 8 dot rows in a fixed 9-cell box, half-cell
+    steps, and every mood reachable from (seed, tick)."""
+
+    def rp(self, mood, t=NOW, seed=4, since=None, **kw):
+        return sl.robot_pose(seed, mood, since, t, 60, **kw)
+
+    def quiet(self, **flags):
+        saved = sl.alive_flags
+        on = dict(_QUIET, **flags)
+        sl.alive_flags = lambda s, t: dict(on)
+        self.addCleanup(setattr, sl, "alive_flags", saved)
+
+    def base(self, seed=4):
+        return sl._robot_body(seed)
+
+    def test_box_is_9_cells_on_both_lines_for_every_pose(self):
+        for seed in range(0, 30, 7):
+            for mood in MOODS_ALL:
+                for el in (None, 0, 3, 7, 12, 40, 4000):
+                    for t in range(NOW, NOW + 8):
+                        for icon in ("", "!", "\U0001F6A9"):
+                            since = None if el is None else t - el
+                            p = sl.robot_pose(seed, mood, since, t, 60, icon=icon)
+                            label = (seed, mood, el, t, icon)
+                            self.assertEqual(p["kind"], "robot", label)
+                            self.assertEqual(p["w"], sl.ROBOT_W, label)
+                            self.assertEqual([len(r) for r in p["dots"]], [2 * sl.ROBOT_W] * 8, label)
+                            self.assertIn(p["sub"], (0, 1), label)
+                            self.assertTrue(0 <= p["pos"] <= 60 - sl.ROBOT_W, label)
+                            for rule_top in (False, True):
+                                up, low = sl.render_robot(p, rule_top)
+                                self.assertEqual(sl.vislen(up), sl.ROBOT_W, label)
+                                self.assertEqual(sl.vislen(low), sl.ROBOT_W, label)
+                                self.assertTrue(_CELL_RE.fullmatch(up), label)
+                                self.assertTrue(_CELL_RE.fullmatch(low), label)
+
+    def test_steady_calm_dots_are_the_grid(self):
+        self.quiet()
+        g = sl.robot_grid(4)
+        for t in range(NOW, NOW + 40):
+            p = self.rp("calm", t)
+            cv = sl._shift(p["dots"], -p["sub"])
+            for r in range(8):
+                self.assertEqual(cv[r][:3] + cv[r][15:], [None] * 6, (t, r))
+                self.assertEqual(cv[r][3:15], [{"body": "b", "eye": "e", "hole": "h"}.get(v)
+                                               for v in g[r]], (t, r))
+
+    def test_nothing_falls_off_the_box(self):
+        self.quiet(breathe=True)
+        for seed in range(12):
+            body = _dots(sl._breathe(self.base(seed), 8))
+            for mood in ("calm", "working", "error", "red"):
+                for t in range(NOW, NOW + 12):
+                    p = sl.robot_pose(seed, mood, None, t, 60)
+                    self.assertEqual(_dots(p["dots"]), body, (seed, mood, t))
+
+    def test_half_cell_steps(self):
+        self.quiet()
+        ps = [self.rp("calm", NOW + i) for i in range(400)]
+        at = [2 * p["pos"] + p["sub"] for p in ps]
+        self.assertEqual(max(abs(a - b) for a, b in zip(at, at[1:])), 1)
+        self.assertEqual({p["sub"] for p in ps}, {0, 1})
+        for p in ps:
+            self.assertEqual(p["dots"], sl._shift(self.base(), p["sub"]))
+
+    def test_render_cells(self):
+        self.quiet()
+        p = self.rp("calm", color=46)
+        up, low = sl.render_robot(p)
+        cv = p["dots"]
+        for line, rows, blank in ((up, cv[:4], " "), (low, cv[4:], "─")):
+            plain = sl.strip_ansi(line)
+            for c, (ch, want) in enumerate(zip(plain, sl.braille(rows))):
+                self.assertEqual(ch, want or blank, (c, line))
+        self.assertEqual(sl.strip_ansi(sl.render_robot(p, rule_top=True)[0]).replace("─", " "),
+                         sl.strip_ansi(up))
+        self.assertTrue(_has_color(up + low, 46))
+        self.assertFalse(_has_color(up + low, 255))  # no white: eyes are holes
+
+    def test_blink_fills_the_eyes_but_not_the_chest(self):
+        self.quiet(blink=True)
+        seed = next(s for s in range(50) if sl.robot_parts(s)["chest"] != "plain")
+        cv = sl.robot_pose(seed, "calm", None, NOW, 60)["dots"]
+        self.assertFalse(any(v == "e" for row in cv for v in row))
+        self.assertTrue(any(v == "h" for row in cv for v in row))
+        eyes = sum(1 for row in self.base(seed) for v in row if v == "e")
+        self.assertEqual(_dots(cv), _dots(self.base(seed)) + eyes)
+
+    def test_breath_hop_and_walk(self):
+        self.quiet(breathe=True)
+        self.assertEqual(self.rp("calm")["dots"], sl._shift(sl._breathe(self.base(), 8),
+                                                            self.rp("calm")["sub"]))
+        self.quiet(hop=True)
+        for mood in ("calm", "working"):
+            p = self.rp(mood, NOW + 2)  # an even tick: no walk step
+            self.assertEqual(p["dots"], sl._shift(sl._rise(self.base()), p["sub"]), mood)
+        self.assertFalse(any(self.rp("calm", NOW + 2)["dots"][7]))
+        self.quiet()
+        odd = next(t for t in range(NOW, NOW + 4) if t % 2)
+        p = self.rp("working", odd)
+        cv = sl._shift(p["dots"], -p["sub"])
+        self.assertEqual(cv[:6], self.base()[:6])
+        self.assertNotEqual(cv[6:], self.base()[6:])    # the legs step
+        self.assertEqual(_dots(cv), _dots(self.base()))
+
+    def test_yours_waves_and_jumps_once(self):
+        self.quiet()
+        seen = set()
+        for t in range(NOW, NOW + 4):
+            p = self.rp("yours", t, since=t - 40)
+            cv = sl._shift(p["dots"], -p["sub"])
+            extra = _dots(cv) - _dots(self.base())
+            self.assertEqual(extra, 2, t)                  # two arm tips beside the head
+            seen |= {r for r in range(8) if cv[r] != self.base()[r]}
+        self.assertEqual(seen, {1, 2})                     # up and down
+        jump = self.rp("yours", NOW, since=NOW - 1)["dots"]
+        self.assertFalse(any(jump[7]))                     # risen a dot row
+
+    def test_needs_bounces_with_a_yellow_question_mark(self):
+        self.quiet()
+        ps = [self.rp("needs", NOW + i, since=NOW - 60) for i in range(4)]
+        self.assertTrue(all(p["ask"] is not None for p in ps))
+        self.assertEqual({any(p["dots"][7]) for p in ps}, {True, False})  # bounces
+        up, low = sl.render_robot(ps[0])
+        self.assertIn("?", sl.strip_ansi(up))
+        self.assertNotIn("?", sl.strip_ansi(low))
+        self.assertTrue(_has_color(up, sl.ICON_256))
+
+    def test_idle_blinks_slowly_and_asleep_powers_down(self):
+        self.quiet()
+        shut = [not any(v == "e" for row in self.rp("idle", NOW + i)["dots"] for v in row)
+                for i in range(12)]
+        self.assertEqual(sum(shut), 4)
+        p = self.rp("asleep")
+        self.assertEqual(p["dots"][:4], [[None] * 18] * 4)   # the upper text row empties
+        self.assertTrue(all(any(row) for row in p["dots"][4:]))
+        self.assertFalse(any(v == "e" for row in p["dots"] for v in row))
+        self.assertEqual(p["icon_row"], 1)
+        up, low = sl.render_robot(sl.robot_pose(4, "asleep", None, NOW, 60, icon="z"))
+        self.assertEqual(sl.strip_ansi(up).strip(), "")
+        self.assertIn("z", sl.strip_ansi(low))
+
+    def test_error_shakes_red_jitters_agitated_widens_the_eyes(self):
+        self.quiet()
+        for mood in ("error", "red"):
+            at = {tuple(map(tuple, sl._shift(self.rp(mood, NOW + i)["dots"], -self.rp(mood, NOW + i)["sub"])))
+                  for i in range(12)}
+            self.assertGreater(len(at), 1, mood)
+        self.assertEqual(self.rp("red")["body"], sl.RED_256)
+        p = self.rp("agitated")
+        self.assertEqual(p["body"], sl.AMBER)
+        cv = sl._shift(p["dots"], -p["sub"])
+        eyes = [c for c in range(18) if cv[2][c] == "e"]
+        self.assertTrue(all(cv[1][c] == "e" for c in eyes))     # wide eyes: a row taller
+
+    def test_scatter_on_mood_change(self):
+        self.quiet()
+        t = next(t for t in range(NOW, NOW + 9) if self.rp("working", t)["sub"] == 0)
+        cv = self.rp("working", t, since=t - 1)["dots"]
+        self.assertNotEqual(cv, self.base())
+        self.assertEqual(_dots(cv), _dots(self.base()))
+
+    def test_deterministic_and_tick_s(self):
+        for mood in MOODS_ALL:
+            for t in (NOW, NOW + 3, NOW + 999):
+                self.assertEqual(self.rp(mood, t, since=t - 4), self.rp(mood, t, since=t - 4))
+        for i in range(5):
+            self.assertEqual(self.rp("working", NOW * 5 + i, tick_len=5),
+                             self.rp("working", NOW, tick_len=1))
+
+    def test_big_pose_dispatches_by_family(self):
+        for fam in sl.FAMILIES:
+            p = sl.big_pose(3, "calm", None, NOW, 60, fam)
+            self.assertEqual(p["kind"], "robot" if fam == "robot" else "half", fam)
+            self.assertEqual(p["w"], sl.ROBOT_W if fam == "robot" else sl.BOX_W, fam)
+            up, low = sl.render_big(p, rule_top=True)
+            self.assertEqual((sl.vislen(up), sl.vislen(low)), (p["w"], p["w"]), fam)
+        self.assertEqual(sl.big_pose(3, "calm", None, NOW, 60, "robot"),
+                         sl.robot_pose(3, "calm", None, NOW, 60))
+
+
 class TestTinyFrame(CreatureCase):
     ROW = sl.NEON_GREEN + "┌─" + sl.R + "x" * 20
     LOOK = {"seed": 11, "family": "alien", "color": None}
@@ -3964,6 +4234,124 @@ class TestBigFrame(CreatureCase):
                 else:
                     self.assertEqual(on[1], off[1], cols)
         self.assertTrue(seen)
+
+
+class TestRobotFrame(CreatureCase):
+    """The robot in the big and tall layouts: a 9-cell box of braille on two
+    text rows; nothing else moves."""
+    ROW1 = sl.NEON_GREEN + "┌─" + sl.R + "x" * 20
+    LOOK = {"seed": 11, "family": "robot", "color": None}
+
+    def test_big_box_straddles_the_rows(self):
+        for n2 in (10, 30):
+            row2 = sl.NEON_GREEN + "└─" + sl.R + "y" * n2
+            for mood in MOODS_ALL:
+                for icon in ("", "!"):
+                    for cols in range(41, 200, 13):
+                        for now in (NOW, NOW + 1, NOW + 170):
+                            pres = {"mood": mood, "bubble": "", "since": now - 7,
+                                    "mood_since": now - 7, "icon": icon}
+                            r1, r2 = sl._frame_big(self.ROW1, row2, cols, True, 50, now, pres,
+                                                   self.LOOK)
+                            b1 = sl._frame(self.ROW1, cols, "┐", True)
+                            b2 = sl._frame(row2, cols, "┘", True)
+                            label = (n2, mood, icon, cols, now)
+                            self.assertEqual((sl.vislen(r1), sl.vislen(r2)), (cols, cols), label)
+                            start = max(sl.vislen(self.ROW1), sl.vislen(row2)) + 1
+                            track = cols - 1 - start
+                            if track < 17:
+                                self.assertEqual((r1, r2), (b1, b2), label)
+                                continue
+                            p = sl.robot_pose(11, mood, now - 7, now, track, None, icon)
+                            top, bottom = sl.render_robot(p, rule_top=True)
+                            col, w = start + p["pos"], sl.ROBOT_W
+                            c1, c2 = _cells(sl.strip_ansi(r1)), _cells(sl.strip_ansi(r2))
+                            k1, k2 = _cells(sl.strip_ansi(b1)), _cells(sl.strip_ansi(b2))
+                            self.assertEqual(c1[col:col + w], _cells(sl.strip_ansi(top)), label)
+                            self.assertEqual(c2[col:col + w], _cells(sl.strip_ansi(bottom)), label)
+                            self.assertEqual(c2[:col] + c2[col + w:], k2[:col] + k2[col + w:], label)
+                            self.assertEqual(c1[:col] + c1[col + w:], k1[:col] + k1[col + w:], label)
+                            self.assertEqual((c1[-1], c2[-1]), ("┐", "┘"), label)
+
+    def test_tall_head_line_and_row_1(self):
+        for mood in MOODS_ALL:
+            for cols in range(41, 200, 13):
+                for now in (NOW, NOW + 1):
+                    pres = {"mood": mood, "bubble": "", "since": now - 7, "mood_since": now - 7,
+                            "icon": ""}
+                    head, r1 = sl._frame_creature(self.ROW1, cols, True, 50, now, pres, self.LOOK)
+                    b1 = sl._frame(self.ROW1, cols, "┐", True)
+                    label = (mood, cols, now)
+                    self.assertEqual(sl.vislen(r1), cols, label)
+                    track = cols - sl.vislen(self.ROW1) - 2
+                    if track < 17:
+                        self.assertEqual((head, r1), (sl.R, b1), label)
+                        continue
+                    p = sl.robot_pose(11, mood, now - 7, now, track)
+                    up, low = sl.render_robot(p)
+                    col, w = sl.vislen(self.ROW1) + 1 + p["pos"], sl.ROBOT_W
+                    c1, k1 = _cells(sl.strip_ansi(r1)), _cells(sl.strip_ansi(b1))
+                    self.assertEqual(c1[col:col + w], _cells(sl.strip_ansi(low)), label)
+                    self.assertEqual(c1[:col] + c1[col + w:], k1[:col] + k1[col + w:], label)
+                    h = _cells(sl.strip_ansi(head))
+                    self.assertEqual(h[col:col + w], _cells(sl.strip_ansi(up)), label)
+                    self.assertEqual(set(h[:col]), {" "} if col else set(), label)
+
+    def test_the_box_is_linked_on_both_rows(self):
+        action = lambda name, text, extra="": sl.link("retro-hud://" + name, text)
+        row2 = sl.NEON_GREEN + "└─" + sl.R + "y" * 10
+        pres = {"mood": "working", "bubble": "ready", "since": NOW, "mood_since": None}
+        r1, r2 = sl._frame_big(self.ROW1, row2, 120, True, 50, NOW, pres, self.LOOK, action)
+        self.assertEqual((r1.count("retro-hud://card"), r2.count("retro-hud://card")), (1, 1))
+        head, r1 = sl._frame_creature(self.ROW1, 120, True, 50, NOW, pres, self.LOOK, action)
+        self.assertEqual((head.count("retro-hud://card"), r1.count("retro-hud://card")), (1, 1))
+
+    def test_hud_robot_at_every_size(self):
+        os.environ["RETRO_HUD_SPRITE"] = "robot"
+        self.addCleanup(os.environ.pop, "RETRO_HUD_SPRITE", None)
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        seen = {}
+        for size, n in (("tiny", 2), ("big", 2), ("tall", 3)):
+            os.environ["RETRO_HUD_CREATURE"] = size
+            for cols in range(50, 241, 10):
+                for t in (NOW, NOW + 1, NOW + 30):
+                    on = sl.render(self.payload(FULL), cols, t)
+                    os.environ["RETRO_HUD_CREATURE"] = "0"
+                    off = sl.render(self.payload(FULL), cols, t)
+                    os.environ["RETRO_HUD_CREATURE"] = size
+                    self.assertEqual(len(on), n, (size, cols))
+                    for a, b in zip(on[-2:], off):
+                        self.assertEqual(sl.vislen(a), sl.vislen(b), (size, cols))
+                    plain = "\n".join(sl.strip_ansi(r) for r in on)
+                    if _TINY_CELL.search(plain):
+                        seen.setdefault(size, cols)
+                        rows = [i for i, r in enumerate(on) if _TINY_CELL.search(sl.strip_ansi(r))]
+                        self.assertEqual(len(rows), 1 if size == "tiny" else 2, (size, cols))
+                        self.assertNotIn("▀", plain)
+                        self.assertNotIn("▄", plain)
+        self.assertEqual(set(seen), {"tiny", "big", "tall"})
+        sl.render(self.payload(FULL), 160, NOW)
+        self.assertEqual(self.state_file()["creature"], "robot")
+
+    def test_robot_excursions_keep_the_rows_in_shape(self):
+        os.environ["RETRO_HUD_EXCURSIONS"] = "1"
+        self.addCleanup(os.environ.__setitem__, "RETRO_HUD_EXCURSIONS", "0")
+        look = {"seed": 0, "family": "robot", "color": None}
+        calm = {"mood": "calm", "bubble": "", "since": 0, "mood_since": None, "icon": ""}
+        for kind in sl.EXCURSION_KINDS:
+            p = _when(kind, 0)
+            frames = [sl.excursion_rows("big", ExcursionCase.ROW1, ExcursionCase.ROW2, 100, True,
+                                        30, t, calm, look)
+                      for t in range(p["start"], p["start"] + p["dur"])]
+            self.assertTrue(all(f is not None for f in frames), kind)
+            for i, rows in enumerate(frames):
+                for r, (lead, corner) in zip(rows, (("┌─", "┐"), ("└─", "┘"))):
+                    plain = sl.strip_ansi(r)
+                    self.assertEqual(sl.vislen(r), 100, (kind, i))
+                    self.assertEqual((plain[:2], plain[-1]), (lead, corner), (kind, i))
+                self.assertEqual(rows[0].count("\033]8;;https://example.com/b\a"), 1, (kind, i))
+            self.assertTrue(any(_TINY_CELL.search(sl.strip_ansi(r[0]) + sl.strip_ansi(r[1]))
+                                for r in frames), kind)
 
 
 class TestCompositor(unittest.TestCase):
@@ -4356,6 +4744,17 @@ class TestCreatureCLI(unittest.TestCase):
                 self.assertEqual(p.returncode, 0, p.stderr.decode())
                 self.assertEqual(p.stderr, b"")
                 self.assertEqual(p.stdout.count(b"\n"), newlines, (creature, stdin, args))
+
+    def test_robot_demo_is_braille_on_two_rows(self):
+        for creature, newlines in (("big", 1), ("tall", 2)):
+            env = dict(os.environ, COLUMNS="160", RETRO_HUD_CREATURE=creature, RETRO_HUD_SPRITE="robot")
+            p = subprocess.run([sys.executable, self.SCRIPT, "--demo"], stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, env=env, timeout=10)
+            self.assertEqual(p.returncode, 0, p.stderr.decode())
+            out = p.stdout.decode()
+            self.assertEqual(out.count("\n"), newlines, creature)
+            rows = [sl.strip_ansi(r) for r in out.split("\n")]
+            self.assertEqual(sum(1 for r in rows if _TINY_CELL.search(r)), 2, (creature, rows))
 
     def test_degraded_fallback_keeps_three_lines(self):
         import contextlib

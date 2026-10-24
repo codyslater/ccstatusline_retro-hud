@@ -99,7 +99,7 @@ the % is always the token touching its own bar. Each gauge escalates on
 its own, and the pinned label is the last thing row 2 gives up when the
 terminal narrows, so neither number flickers away under you.
 """
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 import calendar
 import json
@@ -1061,8 +1061,8 @@ def _map_pane(d, sid):
 # rows), straddling rows 1 and 2 (big) or with its upper half on a head
 # line above row 1 (tall). It owns a fixed box and nothing else: the
 # segments, corners and row 2's readings never move.
-FAMILIES = ("blob", "beast", "alien", "bot")
-_FAMILY_ALIAS = {"cat": "beast", "robot": "bot", "ghost": "blob"}
+FAMILIES = ("blob", "beast", "alien", "bot", "robot")
+_FAMILY_ALIAS = {"cat": "beast", "ghost": "blob"}  # robot is its own family since 3.1
 CREATURE_COLORS = {"pink": 198, "green": 46, "purple": 135, "cyan": 45, "orange": 202}
 CREATURE_PALETTE = (198, 46, 135, 45)  # seeded body colours; orange is for warnings
 CREATURE_ATTEMPTS = 16
@@ -1212,7 +1212,7 @@ def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS, width=9):
     rand = _mulberry32(seed ^ zlib.crc32(family.encode()))
     last = width - 1
     for _ in range(attempts):
-        h = _grow(rand, family)
+        h = _grow(rand, "bot" if family == "robot" else family)  # a 4-row robot is a brick
         g = [[h[r][min(c, last - c)] for c in range(width)] for r in range(4)]
         seen, todo = {(1, 4)}, [(1, 4)]  # keep what touches the spine
         while todo:
@@ -1228,6 +1228,87 @@ def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS, width=9):
         if sum(1 for v in g[1] if v == "eye") == 2 and sum(1 for v in g[3] if v) >= 2:
             return tuple(tuple(row) for row in g)
     return FALLBACK_GRID if width == 9 else FALLBACK_TINY
+
+
+# ── the robot family: 12×8 dots, parts picked by the seed ──
+# Eight dot rows (two braille text rows): antenna | head top | eyes | chin
+# or neck | shoulders | torso (chest) | legs | feet. Built from parts
+# rather than grown, so every seed is unmistakably a robot: flat head,
+# square eyes or a visor, boxy torso, arms, legs or treads. Mirrored.
+# "hole" cells (the chest panel or lights) are unlit dots that never
+# blink. At 4 rows (tiny, the half-block pose) the family is the bot brick.
+ROBOT_COLS, ROBOT_ROWS = 12, 8
+ROBOT_W = 9               # its box in cells: 12 body dots + 3 each side
+_ROBOT_OPTS = {"antenna": ("one", "two", "dish", "ears", "flat"),
+               "eyes": ("squares", "squares", "visor", "dots"),
+               "neck": (True, False),
+               "arms": ("down", "down", "out", "up", "none"),
+               "chest": ("panel", "panel", "lights", "plain"),
+               "legs": ("legs", "legs", "treads", "pole"),
+               "torso": (8, 10, 10, 12)}
+
+
+def robot_parts(seed):
+    """The robot's parts for `seed`: {"antenna", "eyes", "neck", "arms",
+    "chest", "legs", "head" (6, 8 or 10 dots), "torso" (8, 10 or 12)}."""
+    rand = _mulberry32(seed ^ zlib.crc32(b"robot"))
+    parts = {}
+    for k in ("antenna", "eyes", "neck", "arms", "chest", "legs", "torso"):
+        opts = _ROBOT_OPTS[k]
+        parts[k] = opts[int(rand() * len(opts))]
+    heads = (8, 8, 10) if parts["eyes"] == "squares" else (6, 8, 10)  # squares need room
+    parts["head"] = heads[int(rand() * len(heads))]
+    return parts
+
+
+def _centred(pattern, width=ROBOT_COLS):
+    left = (width - len(pattern)) // 2
+    return "." * left + pattern + "." * (width - len(pattern) - left)
+
+
+def robot_grid(seed):
+    """The robot's body: ROBOT_ROWS × ROBOT_COLS of None, "body", "eye" or
+    "hole" (a tuple of tuples), from robot_parts(seed)."""
+    p = robot_parts(seed)
+    W, hw, tw = ROBOT_COLS, p["head"], p["torso"]
+    hl, tl = (W - hw) // 2, (W - tw) // 2
+    arm = max(tl - 2, 0)                      # the arms' column (and its mirror)
+    rows = [{"one": _centred("XX"), "two": _centred("X" + "." * (hw - 4) + "X"),
+             "dish": _centred("X" * (hw - 2)), "ears": _centred("X" * (hw + 2)),
+             "flat": _centred("X" * hw)}[p["antenna"]],
+            _centred("X" * hw)]
+    inner = hw - 2
+    rows.append(_centred({"squares": "X" + "EE" + "X" * (inner - 4) + "EE" + "X",
+                          "visor": "X" + "E" * inner + "X",
+                          "dots": "XE" + "X" * (inner - 2) + "EX"}[p["eyes"]]))
+    rows.append(_centred("XX") if p["neck"] else _centred("X" * hw))
+    torso = _centred("X" * tw)
+    shoulders = _centred("X" * min(tw + 4, W)) if p["arms"] in ("down", "up") else torso
+    if p["arms"] == "out":
+        shoulders = "X" * W
+    chest = list(torso)
+    if p["chest"] == "panel":
+        chest[5] = chest[6] = "H"
+    elif p["chest"] == "lights":
+        for c in (4, 7) + ((2, 9) if tl <= 1 else ()):
+            chest[c] = "H"
+    chest = "".join(chest)
+
+    def with_arms(row):
+        r = list(row)
+        r[arm] = r[W - 1 - arm] = "X"
+        return "".join(r)
+    if p["arms"] == "up":
+        rows[3] = with_arms(rows[3])
+    rows += [shoulders, with_arms(chest) if p["arms"] == "down" else chest]
+    if p["legs"] == "legs":
+        rows += ["...XX..XX...", "...XX..XX..." if tw == 8 else "..XXX..XXX.."]
+    elif p["legs"] == "treads":
+        rows += ["XX.X.XX.X.XX", "X" * W]
+    else:
+        rows += [_centred("XX"), _centred("X" * 8)]
+    k = {".": None, "X": "body", "E": "eye", "H": "hole"}
+    return tuple(tuple(k[ch] for ch in row) for row in rows)
 
 
 BOX_W = 13                # the creature's footprint: 9 body cells + 2 each side
@@ -1358,12 +1439,12 @@ def _scatter(cv, seed, tick, k):
     """Move k pixels to empty cells of the box, within the rows the pose
     occupies (so a melted creature keeps its head line empty). Seeded by
     (seed, tick, k): a refresh never re-rolls."""
-    w = len(cv[0])
-    rows = [r for r in range(4) if any(cv[r])]
+    w, n = len(cv[0]), len(cv)
+    rows = [r for r in range(n) if any(cv[r])]
     if not rows:
         return cv
     rand = _mulberry32(seed ^ (tick * 2654435761) ^ (k * 40503))
-    full = [(r, c) for r in range(4) for c in range(w) if cv[r][c]]
+    full = [(r, c) for r in range(n) for c in range(w) if cv[r][c]]
     empty = [(r, c) for r in range(rows[0], rows[-1] + 1) for c in range(w)
              if not cv[r][c]]
     out = [row[:] for row in cv]
@@ -1460,8 +1541,8 @@ def pose(seed, mood, mood_since, now, cols, family="alien", color=None, icon="",
     if mood == "needs":
         s = _span(_merge(cv[0], cv[1]))
         ask = min((s[1] if s else 10) + 1, BOX_W - 1)
-    return {"pos": pos, "right": right, "canvas": cv, "body": body, "eye": eye,
-            "x": 231 if body == 198 else 198, "icon": icon or "",
+    return {"kind": "half", "w": BOX_W, "pos": pos, "right": right, "canvas": cv,
+            "body": body, "eye": eye, "x": 231 if body == 198 else 198, "icon": icon or "",
             "icon_row": 1 if mood == "asleep" else 0, "ask": ask}
 
 
@@ -1605,15 +1686,16 @@ _BRAILLE_BITS = ((1, 8), (2, 16), (4, 32), (64, 128))
 
 def braille(dots):
     """4 dot rows (even width) → one braille character per 2×4 dots, or
-    None for a cell with no dot set. "e" (an eye) is a hole: braille has
-    one colour per cell, so eyes are dots left unset."""
+    None for a cell with no dot set. "e" (an eye) and "h" (a hole in the
+    robot's chest) are unset: braille has one colour per cell, so eyes
+    are dots left unset."""
     cells = []
     for ci in range(len(dots[0]) // 2):
         v = 0
         for r in range(4):
             for dc in range(2):
                 tok = dots[r][2 * ci + dc]
-                if tok and tok != "e":
+                if tok and tok not in ("e", "h"):
                     v |= _BRAILLE_BITS[r][dc]
         cells.append(chr(0x2800 + v) if v else None)
     return cells
@@ -1670,6 +1752,135 @@ def render_box(p, rule_top=False):
     return "".join(lines[0]), "".join(lines[1])
 
 
+# ── the robot at big and tall: two braille rows ──
+# robot_grid's 12×8 body in braille (2×4 dots per cell), the upper four
+# dot rows on the upper text row (row 1 for big, the head line for tall),
+# the lower four on the one below. It owns a ROBOT_W-cell box and moves
+# in half cells like the tiny creature; the frames read the box width
+# from the pose ("w"), so nothing else changes.
+def _robot_body(seed):
+    """8 rows × 2 * ROBOT_W dot columns, the body from dot column 3."""
+    k = {"body": "b", "eye": "e", "hole": "h"}
+    return [[None] * 3 + [k.get(v) for v in row] + [None] * 3 for row in robot_grid(seed)]
+
+
+def _shut_eyes(cv):
+    return [["b" if v == "e" else v for v in row] for row in cv]
+
+
+def robot_pose(seed, mood, mood_since, now, cols, color=None, icon="", tick_len=1):
+    """The robot for this refresh, a pure function of its inputs (as
+    tiny_pose: `cols` is the rule's length in cells, motion in dots).
+    Returns {"kind": "robot", "w": ROBOT_W, "pos": box offset in cells,
+    "sub": 0/1 dot offset inside it, "right", "dots": 8 rows × 2 * ROBOT_W
+    dot columns of None / "b" / "e" (an eye) / "h" (a chest hole), "body":
+    256-colour index, "icon", "icon_row": 0 upper / 1 lower, "ask": cell of
+    a yellow "?" or None}. Moods: it walks (legs step), hops, blinks and
+    breathes; waves its arm tips beside the head when the turn is yours;
+    bounces with a "?" when it needs you; blinks slowly when idle and
+    powers down flat on the lower row when asleep; shakes on error,
+    jitters in the red zone and widens its eyes when agitated."""
+    mood = mood if mood in CREATURE_SPEEDS else "calm"
+    tick_len = max(int(tick_len), 1)
+    tick = int(now) // tick_len
+    el = None if mood_since is None else max(now - mood_since, 0)
+    cv = _robot_body(seed)
+    dw = 2 * ROBOT_W
+    dot, right = _motion(seed, mood, el, mood_since, tick, tick_len,
+                         2 * max(cols - ROBOT_W, 0), False)
+    pos, sub = divmod(dot, 2)
+    fl = alive_flags(seed, tick)
+
+    if fl["breathe"] and mood not in ("needs", "asleep"):
+        cv = _breathe(cv, 8)
+    if fl["blink"] and mood not in _NO_BLINK:
+        cv = _shut_eyes(cv)
+    if mood == "working" and tick % 2:  # walk cycle: the legs step out
+        cv[6:] = _shift(cv[6:], 1 if right else -1)
+    if mood in ("calm", "working") and fl["hop"]:
+        cv = _rise(cv)
+    elif mood == "yours":  # stops and waves: arm tips beside the head, up and down
+        s = _span(cv[1])
+        if s:
+            r = 1 if tick % 2 == 0 else 2
+            cv[r][s[0] - 1] = cv[r][s[1] + 1] = "b"
+        if el is not None and el < JUMP_S:
+            cv = _rise(cv)
+    elif mood == "needs":
+        if tick % 2:
+            cv = _rise(cv)
+    elif mood == "idle":
+        if tick % 6 >= 4:  # slow blinks: shut for two ticks in six
+            cv = _shut_eyes(cv)
+    elif mood == "asleep":  # powered down: folded flat on the lower row
+        cv = ([[None] * dw for _ in range(4)] +
+              [_widen(_merge(cv[r], cv[r + 1])) for r in (0, 2, 4, 6)])
+    elif mood == "error":
+        cv = _shift(cv, 1 if tick % 2 else -1)
+    elif mood == "red":  # jitters
+        cv = _shift(cv, int(_roll(seed, tick, 0x7E7) * 3) - 1)
+    elif mood == "agitated":
+        for r in range(1, ROBOT_ROWS):
+            for c in range(dw):
+                if cv[r][c] == "e" and cv[r - 1][c] == "b":
+                    cv[r - 1][c] = "e"  # wide eyes
+    if el is not None and el < SCATTER_S:
+        cv = _scatter(cv, seed, tick, 6 if el < SCATTER_S / 2 else 3)
+    cv = _shift(cv, sub)
+    ask = None
+    if mood == "needs":
+        top = cv[0]
+        for r in range(1, 4):
+            top = _merge(top, cv[r])
+        s = _span(top)
+        ask = min((s[1] if s else dw - 3) // 2 + 1, ROBOT_W - 1)
+    return {"kind": "robot", "w": ROBOT_W, "pos": pos, "sub": sub, "right": right, "dots": cv,
+            "body": _colour(seed, mood, color), "icon": icon or "",
+            "icon_row": 1 if mood == "asleep" else 0, "ask": ask}
+
+
+def render_robot(p, rule_top=False):
+    """(upper cells, lower cells) for a robot pose: two strings of visible
+    width ROBOT_W, braille in the body colour, every cell ending with an
+    SGR reset. Empty cells are rule ─, except on the tall layout's head
+    line (spaces) unless `rule_top`; the "?" and an event icon in yellow."""
+    cv = p["dots"]
+    lines = []
+    for half in (0, 1):
+        cells = []
+        for ch in braille(cv[4 * half:4 * half + 4]):
+            if ch:
+                cells.append(_sgr(p["body"]) + ch + R)
+            else:
+                cells.append(" " + R if half == 0 and not rule_top else RULE + "─" + R)
+        lines.append(cells)
+    mark = lambda ch: "\033[1m" + _sgr(ICON_256) + ch + R
+    if p.get("ask") is not None:
+        lines[0][p["ask"]] = mark("?")
+    icon = p.get("icon") or ""
+    if icon:
+        row = lines[p.get("icon_row", 0)]
+        row[ROBOT_W - vwidth(icon):] = [mark(icon)]
+    return "".join(lines[0]), "".join(lines[1])
+
+
+def big_pose(seed, mood, mood_since, now, cols, family="alien", color=None, icon="",
+             tick_len=1):
+    """The two-row creature (big and tall): robot_pose for the robot
+    family, the half-block pose for the rest. Every pose carries "kind"
+    and its box width "w"."""
+    if creature_family(family) == "robot":
+        return robot_pose(seed, mood, mood_since, now, cols, color, icon, tick_len)
+    return pose(seed, mood, mood_since, now, cols, family, color, icon, tick_len)
+
+
+def render_big(p, rule_top=False):
+    """(upper, lower) cell strings for a big_pose() pose, each p["w"] wide."""
+    if p.get("kind") == "robot":
+        return render_robot(p, rule_top)
+    return render_box(p, rule_top)
+
+
 # ── excursions: now and then the creature explores the rest of the bar ──
 EXCURSION_KINDS = ("stretch", "peek", "crawl", "downstairs", "hang")
 EXCURSION_S = {"stretch": (4, 5), "peek": (6, 12), "crawl": (10, 20),
@@ -1715,11 +1926,12 @@ def _half_again(cv):  # one and a half times as wide: every other column twice
     return [[v for c, v in enumerate(row) for _ in range(1 + c % 2)] for row in cv]
 
 
-def _peeking(cv):
-    """Only what shows round a corner: the head rows up to and including
-    the first eye (and the arm beside it); the legs are hidden."""
+def _peeking(cv, keep=3):
+    """Only what shows round a corner: the head rows (the first `keep`)
+    up to and including the first eye (and the arm beside it); the legs
+    are hidden."""
     w = len(cv[0])
-    eyes = [c for c in range(w) if any(cv[r][c] in ("e", "x") for r in range(4))]
+    eyes = [c for c in range(w) if any(cv[r][c] in ("e", "x") for r in range(len(cv)))]
     if eyes:
         cut = eyes[0]
         while cut + 1 in eyes:
@@ -1728,7 +1940,8 @@ def _peeking(cv):
     else:  # eyes shut this frame: the first few columns
         s = _span(_merge(_merge(cv[0], cv[1]), cv[2]))
         cut = (s[0] if s else 0) + 3
-    return [row[:cut + 1] + [None] * (w - cut - 1) for row in cv[:3]] + [[None] * w]
+    return ([row[:cut + 1] + [None] * (w - cut - 1) for row in cv[:keep]] +
+            [[None] * w for _ in range(len(cv) - keep)])
 
 
 def _sprite(rows, row):
@@ -1757,6 +1970,18 @@ def _sprites(size, p):
                 "down": _sprite(body, 1), "half": _sprite(cells(_half_again(cv)), 0),
                 "wide": _sprite(cells(_double(cv)), 0), "peek": _sprite(cells(_peeking(cv)), 0),
                 "hang": _sprite(cells(cv[::-1]), 1)}
+    if p.get("kind") == "robot":
+        def cells(dots):  # one braille cell row per 4 dot rows
+            if len(dots[0]) % 2:
+                dots = [row + [None] for row in dots]
+            return [[None if ch is None else _sgr(p["body"]) + ch + R
+                     for ch in braille(dots[r:r + 4])] for r in range(0, len(dots), 4)]
+        cv = p["dots"]
+        flat = [_merge(cv[r], cv[r + 4]) for r in range(4)]  # both halves on one text row
+        return {"home": _sprite(cells(cv), 0), "crawl": _sprite(cells(flat), 0),
+                "down": _sprite(cells(flat), 1), "half": _sprite(cells(_half_again(cv)), 0),
+                "wide": _sprite(cells(_double(cv)), 0), "peek": _sprite(cells(_peeking(cv, 4)), 0),
+                "hang": _sprite(cells(cv[::-1]), 0)}
 
     def cells(cv):
         return [[_half_cell(cv[2 * r][c], cv[2 * r + 1][c], p) for c in range(len(cv[0]))]
@@ -1893,8 +2118,8 @@ def excursion_rows(size, row1, row2, cols, frame_on, alien_pct, now, pres, look)
         if track < CREATURE_MIN_TRACK:
             return None
         def at(t):
-            return pose(look["seed"], mood, mood_since, t, track, look["family"],
-                        look["color"], "", tl)
+            return big_pose(look["seed"], mood, mood_since, t, track, look["family"],
+                            look["color"], "", tl)
     sp = _sprites(size, at(now))
     if None in sp.values():
         return None
@@ -2065,14 +2290,14 @@ def _frame_big(row1, row2, cols, frame_on, alien_pct, now, pres, look, action=No
     if not frame_on or alien_pct is None or track < CREATURE_MIN_TRACK:
         return plain
     mood, mood_since, icon, bubble = _creature_mood(alien_pct, pres)
-    p = pose(look["seed"], mood, mood_since, now, track, look["family"], look["color"],
-             icon, tick_s())
-    top, bottom = render_box(p, rule_top=True)
+    p = big_pose(look["seed"], mood, mood_since, now, track, look["family"], look["color"],
+                 icon, tick_s())
+    top, bottom = render_big(p, rule_top=True)
     if action:
         top, bottom = action("card", top), action("card", bottom)
-    col = start + p["pos"]
-    return (_boxed(row1, cols, "┐", col, top, BOX_W, bubble, p["right"]),
-            _boxed(row2, cols, "┘", col, bottom, BOX_W))
+    col, bw = start + p["pos"], p["w"]
+    return (_boxed(row1, cols, "┐", col, top, bw, bubble, p["right"]),
+            _boxed(row2, cols, "┘", col, bottom, bw))
 
 
 def _frame_creature(row, cols, frame_on, alien_pct, now, pres, look, action=None):
@@ -2101,16 +2326,17 @@ def _frame_creature(row, cols, frame_on, alien_pct, now, pres, look, action=None
     else:
         mood, mood_since = pres.get("mood"), _num_or_none(pres.get("mood_since"))
         icon, bubble = pres.get("icon") or "", pres.get("bubble") or ""
-    p = pose(look["seed"], mood, mood_since, now, track, look["family"], look["color"],
-             icon if _icon_ok(icon) else "", tick_s())
-    head13, rule13 = render_box(p)
+    p = big_pose(look["seed"], mood, mood_since, now, track, look["family"], look["color"],
+                 icon if _icon_ok(icon) else "", tick_s())
+    head13, rule13 = render_big(p)
     if action:
         head13, rule13 = action("card", head13), action("card", rule13)
-    pos, span = p["pos"], track - BOX_W
+    bw = p["w"]                  # 13 cells, or the robot's 9
+    pos, span = p["pos"], track - bw
     fill = "─" * pos + R + rule13 + RULE + "─" * (span - pos)
     row1 = "{} {}{}{}{}{}{}".format(row, RULE, fill, R, NEON_GREEN, "┐", R)
     col = vislen(row) + 1 + pos  # the box's first column, on both lines
-    room = cols - col - BOX_W    # head-line cells right of the box
+    room = cols - col - bw       # head-line cells right of the box
     side, bubble = _place_bubble(col, col + room, bubble, p["right"]) if bubble else (0, "")
     bw = 1 + vwidth(bubble) if side else 0
     if side == -1:
