@@ -321,7 +321,7 @@ class TestAlien(unittest.TestCase):
         try:
             plain = sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0])
             self.assertNotIn("o.o", plain)
-            self.assertTrue(re.sub(r" [ ⌂↩]$", "", plain).endswith("┐"))  # frame still closes
+            self.assertTrue(re.sub(r"(?<=[┐┘])[ ⌂↩]$", "", plain).endswith("┐"))  # frame still closes
         finally:
             del os.environ["RETRO_HUD_ALIEN"]
 
@@ -487,9 +487,9 @@ class TestHomeLink(unittest.TestCase):
         rows = sl.render(copy.deepcopy(FULL), 220, NOW)
         self.assertIn("\x1b]8;;" + self.URL + "\a⌂\x1b]8;;\a", rows[0])
         plain = sl.strip_ansi(rows[1])
-        self.assertRegex(plain, r"▐█ reviewer ─+┘  $")          # row 2: a gap and a blank cell past the corner …
+        self.assertRegex(plain, r"▐█ reviewer ─+┘ $")           # row 2: a blank cell past the corner …
         self.assertIn("\x1b]8;;" + self.URL + "\a \x1b]8;;\a", rows[1])   # … carrying the same link
-        self.assertRegex(sl.strip_ansi(rows[0]), r"─┐ ⌂$")        # the ⌂ outside the top-right corner
+        self.assertRegex(sl.strip_ansi(rows[0]), r"─┐⌂$")         # the ⌂ right after the top-right corner
         self.assertNotIn("⌂", plain)
         self.assertEqual(sl.vislen(rows[0]), 220)
         self.assertEqual(sl.vislen(rows[1]), 220)
@@ -516,8 +516,8 @@ class TestHomeLink(unittest.TestCase):
             # on the home session, nobody came from anywhere: neither button, column reserved
             os.environ["RETRO_HUD_AT_HOME"] = "1"
             rows = sl.render(copy.deepcopy(FULL), 220, NOW)
-            self.assertRegex(sl.strip_ansi(rows[0]), r"┐  $")
-            self.assertRegex(sl.strip_ansi(rows[1]), r"┘  $")
+            self.assertRegex(sl.strip_ansi(rows[0]), r"┐ $")
+            self.assertRegex(sl.strip_ansi(rows[1]), r"┘ $")
             self.assertNotIn(self.URL, rows[0] + rows[1])
             self.assertNotIn("retro-hud://back", rows[0] + rows[1])
             self.assertEqual(sl.vislen(rows[0]), 220)
@@ -525,8 +525,8 @@ class TestHomeLink(unittest.TestCase):
             with open(os.path.join(cache, "home-from"), "w") as f:
                 f.write("review\n")
             rows = sl.render(copy.deepcopy(FULL), 220, NOW)
-            self.assertRegex(sl.strip_ansi(rows[0]), r"┐  $")
-            self.assertRegex(sl.strip_ansi(rows[1]), r"┘ ↩$")
+            self.assertRegex(sl.strip_ansi(rows[0]), r"┐ $")
+            self.assertRegex(sl.strip_ansi(rows[1]), r"┘↩$")
             self.assertIn("\x1b]8;;retro-hud://back\a↩\x1b]8;;\a", rows[1])
             self.assertIn("\x1b]8;;retro-hud://back\a \x1b]8;;\a", rows[0])     # the cell above: same link
             # inside tmux the retro-hud:// links name the pane and socket, like every action
@@ -539,7 +539,7 @@ class TestHomeLink(unittest.TestCase):
             # away from home: the ⌂, whatever the record says
             os.environ["RETRO_HUD_AT_HOME"] = "0"
             rows = sl.render(copy.deepcopy(FULL), 220, NOW)
-            self.assertRegex(sl.strip_ansi(rows[0]), r"┐ ⌂$")
+            self.assertRegex(sl.strip_ansi(rows[0]), r"┐⌂$")
             self.assertNotIn("↩", sl.strip_ansi(rows[1]))
         finally:
             for k in ("RETRO_HUD_BACK_URL", "RETRO_HUD_AT_HOME"):
@@ -2463,7 +2463,7 @@ class TestPresenceRender(PresenceCase):
                 self.assertEqual(sl.vislen(on[0]), sl.vislen(off[0]), cols)
                 # the gauge alien's rule holds no spaces: the last one is
                 # where the segments end and the rule begins
-                m = re.match(r"^(.*) [^ ]*┐$", re.sub(r" [ ⌂↩]$", "", p_off))
+                m = re.match(r"^(.*) [^ ]*┐$", re.sub(r"(?<=[┐┘])[ ⌂↩]$", "", p_off))
                 segs = m.group(1) if m else p_off
                 self.assertTrue(p_on.startswith(segs + (" " if m else "")), cols)
                 self.assertEqual(p_on[-1], p_off[-1])
@@ -3704,7 +3704,7 @@ class TestCreatureMovement(unittest.TestCase):
 
 def _bar(row):
     """A row's plain text without the outside button column (RETRO_HUD_HOME_URL)."""
-    return re.sub(r" [ ⌂↩]$", "", sl.strip_ansi(row))
+    return re.sub(r"(?<=[┐┘])[ ⌂↩]$", "", sl.strip_ansi(row))
 
 
 def _cells(plain):

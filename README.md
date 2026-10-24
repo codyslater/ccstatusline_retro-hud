@@ -64,7 +64,7 @@ To remove: `bash uninstall.sh`.
 | Cache hit rate | `cache 94%` in $\color{#00ffff}{\textsf{cyan}}$ | terminals ≥ 140 cols |
 | Duration ↔ cost | one field alternating every 30s: `1h` in $\color{#ff0087}{\textsf{pink}}$ ↔ `$41` in $\color{#ffff00}{\textsf{yellow}}$, both rounded hard (whole hours, minutes to 5; two significant figures of cost), so the flip moves its neighbours by a cell at most; no padding (`RETRO_HUD_COST_MODE=both` for two segments) | always; cost alone on narrow terminals |
 | Agent / worktree | `▐█ reviewer` in $\color{#00ffff}{\textsf{cyan}}$ / `⎇ feature-x` in $\color{#ff0087}{\textsf{pink}}$ | `--agent` / `--worktree` sessions |
-| Home link | `⌂` in $\color{#00ff00}{\textsf{neon green}}$, hyperlinked: a jump-home link for multi-session setups — point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions | `RETRO_HUD_HOME_URL` set; stands outside the frame at the far right, past the `┐`, with the blank cell under it carrying the same link; never dropped as the terminal narrows |
+| Home link | `⌂` in $\color{#00ff00}{\textsf{neon green}}$, hyperlinked: a jump-home link for multi-session setups — point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions | `RETRO_HUD_HOME_URL` set; stands right after the `┐`, outside the frame, with the blank cell under it carrying the same link; never dropped as the terminal narrows |
 
 ### Rate-limit label escalation
 
@@ -410,7 +410,7 @@ bind N run-shell "RETRO_HUD_CLIENT=#{q:client_tty} $HOME/.claude/retro-hud-handl
 ```
 
 **Home and back.** Name one session your home (`RETRO_HUD_HOME_SESSION`,
-default `home`) and the bar shows a `⌂` outside the top-right corner in
+default `home`) and the bar shows a `⌂` right after the top-right corner in
 every other session; click it to go home. The home session's bar shows a
 `↩` outside the bottom-right instead, which takes you back to the session
 you came from and then disappears. A home session you started in shows

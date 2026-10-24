@@ -2612,8 +2612,8 @@ def render(data, cols, now, _edges=True):
         return DIM + action("agent", "◈ " + name) + R
 
     # The home and return buttons stand OUTSIDE the frame at the far right, in
-    # a column the frame always leaves free (so the end bars line up whatever
-    # shows): away from home, ⌂ (RETRO_HUD_HOME_URL) past the ┐ on row 1; on
+    # the one column the frame always leaves free (so the end bars line up
+    # whatever shows): away from home, ⌂ (RETRO_HUD_HOME_URL) right after the ┐; on
     # the home session (RETRO_HUD_AT_HOME=1) after a ⌂ click, ↩
     # (RETRO_HUD_BACK_URL) past the ┘ on row 2, which goes back to the session
     # you came from (the handler keeps that in <cache>/home-from); started on
@@ -2635,7 +2635,7 @@ def render(data, cols, now, _edges=True):
     elif at_home and back_url and _home_from():
         button_url, button = back_url, "↩"
     home_seg = NEON_GREEN + link(button_url, button) + R if button else ""
-    edge_w = 2 if frame_on and _edges and home_url else 0
+    edge_w = 1 if frame_on and _edges and home_url else 0
     full_cols, cols = cols, cols - edge_w
     frame_room = 2 if frame_on else 0   # the frame's lead space and corner: a row must leave them
 
@@ -2865,8 +2865,8 @@ def render(data, cols, now, _edges=True):
         blank = NEON_GREEN + link(button_url, " ") + R      # the same link, blank
         top = home_seg if button == "⌂" else blank if button else " "
         bottom = home_seg if button == "↩" else blank if button else " "
-        rows = [r + " " + top if i == len(rows) - 2 else
-                r + " " + bottom if i == len(rows) - 1 else r
+        rows = [r + top if i == len(rows) - 2 else
+                r + bottom if i == len(rows) - 1 else r
                 for i, r in enumerate(rows)]
     return rows
 
