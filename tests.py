@@ -556,6 +556,21 @@ class TestClickActionLinks(unittest.TestCase):
     def test_off_is_byte_identical_to_2_7_0(self):
         self.check_golden()
 
+    def test_a_list_links_only_those_actions(self):
+        os.environ.update({"RETRO_HUD_ACTIONS": "model,diff, card,bogus", "TMUX_PANE": "%7",
+                           "TMUX": "/tmp/tmux-1000/default,1,0"})
+        self.assertEqual(sl.actions_on(), {"model", "diff", "card"})
+        rows = sl.render(copy.deepcopy(FULL), 220, NOW)
+        found = {}
+        for i, row in enumerate(rows):
+            for m in re.finditer(r"\x1b\]8;;(retro-hud://([a-z]+)[^\x07]*)\x07", row):
+                found.setdefault(m.group(2), []).append(i)
+        self.assertEqual(set(found), {"model", "diff"} | ({"card"} if "card" in found else set()))
+        os.environ["RETRO_HUD_ACTIONS"] = "bogus,,"
+        self.assertIsNone(sl.actions_on())
+        self.assertEqual(sl.render(copy.deepcopy(FULL), 220, NOW)[1].count("retro-hud://"), 0)
+        self.assertIs(sl.actions_on() if os.environ.update({"RETRO_HUD_ACTIONS": "1"}) else sl.actions_on(), True)
+
     def test_off_inside_tmux_is_byte_identical(self):
         self.tmux_env()
         self.check_golden()

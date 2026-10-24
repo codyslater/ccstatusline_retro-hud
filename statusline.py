@@ -36,6 +36,8 @@ Env toggles:
     RETRO_HUD_HOME_URL=<url>     end row 2 with a ⌂ jump-home link (OSC 8) to
                                  any URL your desktop can open; never dropped
     RETRO_HUD_ACTIONS=1          click actions: model, effort, context, cost
+                                 (or a list: model,diff,agent,card links
+                                 only those; ctx, cost, usage stay plain)
                                  and lines become retro-hud:// links (inside
                                  tmux only); the rate-limit gauges link to
                                  retro-hud://usage everywhere. Needs a
@@ -411,6 +413,21 @@ def action_query():
     return q
 
 
+_ACTION_NAMES = ("model", "effort", "ctx", "cost", "diff", "usage", "agent", "card")
+
+
+def actions_on():
+    """RETRO_HUD_ACTIONS: True for "1" (every action links), a set of the
+    named actions for a comma list (CS: "only the ones with concrete
+    info or actions"), else None (off). Unknown names are dropped; a
+    list with no known name is off."""
+    v = os.environ.get("RETRO_HUD_ACTIONS", "").strip()
+    if v == "1":
+        return True
+    names = {n.strip() for n in v.split(",")} & set(_ACTION_NAMES)
+    return names or None
+
+
 def make_action():
     """Return action(name, text, extra="") for this render.
 
@@ -419,11 +436,14 @@ def make_action():
     links (it only opens a web page); every other action links only
     inside tmux.
     """
-    if os.environ.get("RETRO_HUD_ACTIONS") != "1":
+    allowed = actions_on()
+    if not allowed:
         return lambda name, text, extra="": text
     query = action_query()
 
     def action(name, text, extra=""):
+        if allowed is not True and name not in allowed:
+            return text  # a segment left plain by the RETRO_HUD_ACTIONS list
         if name == "usage":
             return link("retro-hud://usage" + ("?" + query if query else ""), text)
         if not query:
@@ -1058,7 +1078,7 @@ def _map_pane(d, sid):
     agent menu can find the state and events files. Rewritten only when
     it changes; best effort."""
     pane = os.environ.get("TMUX_PANE", "")
-    if os.environ.get("RETRO_HUD_ACTIONS") != "1" or not _PANE_RE.match(pane):
+    if not actions_on() or not _PANE_RE.match(pane):
         return
     path = os.path.join(d, "pane-{}.sid".format(pane[1:]))
     try:

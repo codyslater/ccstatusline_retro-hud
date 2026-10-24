@@ -369,7 +369,10 @@ otherwise it prints which entry owns it and changes nothing.
 the installer wrote). On macOS or Windows, register the scheme with your
 platform's tool so it runs `retro-hud-handler.sh <url>`.
 
-Without `RETRO_HUD_ACTIONS=1` the HUD renders exactly as before. Outside
+`RETRO_HUD_ACTIONS` may also be a comma list of action names
+(`model,diff,agent,card`): only those segments link, the rest stay plain,
+for a bar with fewer underlines in terminals that mark every hyperlink.
+Without `RETRO_HUD_ACTIONS` the HUD renders exactly as before. Outside
 tmux only the usage links appear — there's no session to type into.
 
 **Right-click in tmux** (3.4+, `mouse on`). If your terminal hands the

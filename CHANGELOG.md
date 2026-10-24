@@ -26,6 +26,10 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   wants you: yellow when it needs you, pink on error, dim when idle or
   asleep. Amber and red still take over when a gauge is hot.
 
+- **`RETRO_HUD_ACTIONS` takes a list.** `model,diff,agent,card` links
+  only those actions; context, cost and the rate-limit gauges render
+  plain. For terminals that underline every hyperlink.
+
 ### Changed
 - **Duration ↔ cost field rounds hard** so its width stays put as it
   flips: whole hours from 1h (`2h`), minutes to the nearest five below,
