@@ -91,8 +91,7 @@ if [ -n "${RETRO_HUD_CLIENT:-}" ]; then
 fi
 
 # A right-click while one of our popups (cloud, card, diff) is up closes it
-# instead of opening another (CS 20261023: "not everything closes back with
-# the same click that opened it"). Each popup's command keeps a marker file
+# instead of opening another (so the click that opened it can close it). Each popup's command keeps a marker file
 # for its client while it runs; inside the binding the handler then writes
 # `display-popup -C` for the binding to run. A stale marker (older than an
 # hour) is ignored. A local extension's popups keep the same marker.
@@ -112,8 +111,7 @@ fi
 # What a popup's runner does after printing: wait for one key — or one click. With
 # mouse reporting on, a click inside the popup arrives as an SGR sequence: a PRESS
 # closes it like a key, a RELEASE (…m) is ignored, so the opening click's own release
-# never closes it however long the button is held (CS 20261023: "can't close status
-# message with left click again"). tmux hands a click
+# never closes it however long the button is held. tmux hands a click
 # outside a popup to nobody, so the popup is centred on the pointer: the second click
 # on the same spot lands inside it.
 POPUP_READ="printf '\\033[?1000h\\033[?1006h'
@@ -699,12 +697,11 @@ show_card() {  # pane; after agent_target
     fi
 }
 
-# The speech cloud (CS 20261023: "a more natural dialogue box like from a
-# cartoon cloud over the adjacent area ... just highlights"): inside the
+# The speech cloud (a small dialogue box beside the creature, highlights only): inside the
 # right-click binding the card is a small rounded popup at the pointer with
 # the highlights only, written to the menu file like a menu so it carries the
 # press's mouse event (-x M; -y the row below the box, so it stands ABOVE the
-# robot: CS 20261023 "open above the monster"). A click on the box or any key
+# creature). A click on the box or any key
 # closes it; tmux hands a click outside a popup to nobody.
 # m: the agent menu, c: the full card (centred), any other key closes. The
 # runner removes its own files: the binding runs it after this script ends.
@@ -815,8 +812,8 @@ case $ACTION in
         git_last="$git_base show --stat --patch --no-ext-diff --no-textconv --color=always HEAD"
         guard=""
         [ -z "$POPUP_MARK" ] || guard="touch $(tmq "$POPUP_MARK"); trap $(tmq "rm -f '$POPUP_MARK'") EXIT; "
-        # A clean tree shows the last commit instead of a blank pager (CS 20261023: "diff
-        # sometimes showing up blank"). q closes, the wheel scrolls (--mouse). No Esc binding:
+        # A clean tree shows the last commit instead of a blank pager. q closes, the wheel
+        # scrolls (--mouse). No Esc binding:
         # with the mouse on, every wheel report starts with Esc and would quit the pager.
         body="d=\$($git_safe 2>&1); if [ -z \"\$d\" ]; then printf '\\033[1mworking tree clean\\033[0m · the last commit:\\n\\n'; $git_last; else $git_safe --stat; echo; printf '%s\\n' \"\$d\"; fi"
         tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) · q closes " -E \

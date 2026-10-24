@@ -30,7 +30,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_WIDTH` | — | hard width override when `$COLUMNS` is wrong |
 | `RETRO_HUD_EMOJI` | `2` | `1`: count emoji as one cell; `0`: skip the folder emoji |
 | `RETRO_HUD_HOME_URL` | — | end row 2 with a hyperlinked `⌂`: a jump-home link for multi-session setups. Point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions. Unset or empty: no glyph |
-| `RETRO_HUD_ACTIONS` | — | `1` turns on [click actions](../README.md#click-actions): model, effort, context gauge, cost and lines link to `retro-hud://…` inside tmux; the rate-limit gauges link to `retro-hud://usage` everywhere. A comma list (`model,diff,agent,card`) links only those actions (names: `model`, `effort`, `ctx`, `cost`, `diff`, `usage`, `agent`, `card`); the rest render plain. Needs a scheme handler (`install.sh --handler`); for right-click menus at the pointer, the tmux binding in the README ("Right-click in tmux"). Any other value: off, output unchanged |
+| `RETRO_HUD_ACTIONS` | — | `1` turns on [click actions](../README.md#click-actions): model, effort, context gauge, cost and lines link to `retro-hud://…` inside tmux; the rate-limit gauges link to `retro-hud://usage` everywhere. A comma list (`model,diff,agent,card`) links only those actions (names: `model`, `effort`, `ctx`, `cost`, `diff`, `usage`, `agent`, `card`); the rest render plain. Needs a scheme handler (`install.sh --handler`); for click menus at the pointer, the tmux binding in the README ("Click in tmux"). Any other value: off, output unchanged |
 
 Example:
 

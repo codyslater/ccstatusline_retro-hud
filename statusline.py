@@ -243,8 +243,8 @@ def vislen(s):
 
 
 def fmt_short_dur(ms):
-    """Session duration, rounded hard (CS: the duration ↔ cost field must
-    not change width as it flips): whole hours from 1h (1h30m → 2h), else
+    """Session duration, rounded hard, so the duration ↔ cost field barely
+    changes width as it flips: whole hours from 1h (1h30m → 2h), else
     minutes to the nearest 5 (47m → 45m), else "0m"."""
     mins = int(ms) // 60000
     m5 = int(5 * round(mins / 5.0)) if mins >= 5 else mins
@@ -419,8 +419,8 @@ _ACTION_NAMES = ("model", "effort", "ctx", "cost", "diff", "usage", "agent", "ca
 
 def actions_on():
     """RETRO_HUD_ACTIONS: True for "1" (every action links), a set of the
-    named actions for a comma list (CS: "only the ones with concrete
-    info or actions"), else None (off). Unknown names are dropped; a
+    named actions for a comma list (only the segments you want clickable),
+    else None (off). Unknown names are dropped; a
     list with no known name is off."""
     v = os.environ.get("RETRO_HUD_ACTIONS", "").strip()
     if v == "1":
@@ -2569,7 +2569,7 @@ def render(data, cols, now):
         return VIM_COLORS.get(vim_mode, NEON_CYAN) + "[" + vim_mode[0] + "]" + R
 
     # RETRO_HUD_SESSION_NAME: 1 (default) the session's name, icon just the ◈
-    # (CS: the auto-generated name takes space), 0 nothing; the ◈ stays the
+    # (an auto-generated name takes space), 0 nothing; the ◈ stays the
     # agent menu's link either way
     name_mode = os.environ.get("RETRO_HUD_SESSION_NAME", "1").strip().lower()
 
@@ -2697,8 +2697,8 @@ def render(data, cols, now):
     def cost_seg(cycle):
         """Cost alone, or (cycle mode) duration ↔ cost in ONE field. Both are
         rounded hard (fmt_short_dur / fmt_short_cost), so their widths differ
-        by a cell or two at most; no padding (CS 20261023: "consistent space
-        instead of frozen totally padded"). The narrow-terminal ladder passes
+        by a cell or two at most; no padding, so the spacing round the
+        separators stays even. The narrow-terminal ladder passes
         cycle=False and shows the cost alone."""
         if not cycle:
             return NEON_YEL + action("cost", cost_str) + R
@@ -2792,7 +2792,7 @@ DEMO_DATA = {
     "model": {"display_name": "Fable 5"},
     "_branch_override": "main",
     "workspace": {"current_dir": "/home/ripley/projects/nostromo",
-                  "repo": {"host": "github.com", "owner": "codyslater",
+                  "repo": {"host": "github.com", "owner": "example",
                            "name": "ccstatusline_retro-hud"}},
     "session_name": "retro-hud-v2",
     "effort": {"level": "max"},
@@ -2807,7 +2807,7 @@ DEMO_DATA = {
                                          "output_tokens": 1150}},
     "cost": {"total_cost_usd": 3.21, "total_duration_ms": 5432100,
              "total_lines_added": 128, "total_lines_removed": 37},
-    "pr": {"number": 42, "url": "https://github.com/codyslater/ccstatusline_retro-hud/pull/42",
+    "pr": {"number": 42, "url": "https://github.com/example/ccstatusline_retro-hud/pull/42",
            "review_state": "approved"},
     "rate_limits": {"five_hour": {"used_percentage": 63},
                     "seven_day": {"used_percentage": 81}},

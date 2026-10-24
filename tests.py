@@ -2387,10 +2387,10 @@ class TestAgentLink(PresenceCase):
     def test_session_name_segment_can_shrink_or_go(self):
         self.tx(asst(NOW - 2, "tool_use"))
         self.actions_on()
-        for mode, want in (("icon", "◈"), ("1", "◈ chan-statusbar"), ("0", None)):
+        for mode, want in (("icon", "◈"), ("1", "◈ polish-the-hud"), ("0", None)):
             os.environ["RETRO_HUD_SESSION_NAME"] = mode
             payload = self.payload()
-            payload["session_name"] = "chan-statusbar"
+            payload["session_name"] = "polish-the-hud"
             rows = sl.render(payload, 160, NOW)
             links = self.name_links(rows[0])
             if want is None:
