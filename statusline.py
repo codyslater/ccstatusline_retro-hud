@@ -2622,6 +2622,12 @@ def render(data, cols, now, _edges=True):
     # With the frame off the button is an ordinary segment.
     home_url = _clean_url(os.environ.get("RETRO_HUD_HOME_URL", ""))
     back_url = _clean_url(os.environ.get("RETRO_HUD_BACK_URL", ""))
+    # a retro-hud:// home or back link carries the pane and socket like the other
+    # actions, so the handler reaches the right tmux server; other schemes as given
+    _q = action_query()
+    if _q:
+        home_url = home_url + "?" + _q if home_url.startswith("retro-hud://") and "?" not in home_url else home_url
+        back_url = back_url + "?" + _q if back_url.startswith("retro-hud://") and "?" not in back_url else back_url
     at_home = os.environ.get("RETRO_HUD_AT_HOME", "").strip() == "1"
     button_url, button = "", ""
     if home_url and not at_home:

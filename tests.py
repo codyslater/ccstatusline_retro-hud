@@ -529,6 +529,13 @@ class TestHomeLink(unittest.TestCase):
             self.assertRegex(sl.strip_ansi(rows[1]), r"┘ ↩$")
             self.assertIn("\x1b]8;;retro-hud://back\a↩\x1b]8;;\a", rows[1])
             self.assertIn("\x1b]8;;retro-hud://back\a \x1b]8;;\a", rows[0])     # the cell above: same link
+            # inside tmux the retro-hud:// links name the pane and socket, like every action
+            os.environ.update({"TMUX_PANE": "%7", "TMUX": "/tmp/tmux-1000/default,1,0"})
+            try:
+                rows = sl.render(copy.deepcopy(FULL), 220, NOW)
+                self.assertIn("\x1b]8;;retro-hud://back?pane=%257&sock=/tmp/tmux-1000/default\a↩", rows[1])
+            finally:
+                os.environ.pop("TMUX_PANE"); os.environ.pop("TMUX")
             # away from home: the ⌂, whatever the record says
             os.environ["RETRO_HUD_AT_HOME"] = "0"
             rows = sl.render(copy.deepcopy(FULL), 220, NOW)
