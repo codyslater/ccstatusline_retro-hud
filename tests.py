@@ -2339,6 +2339,22 @@ class TestAgentLink(PresenceCase):
         os.environ["RETRO_HUD_ACTIONS"] = "1"
         self.assertEqual(self.agent_links(sl.render(self.payload(), 160, NOW)[0]), [])
 
+    def test_session_name_segment_can_shrink_or_go(self):
+        self.tx(asst(NOW - 2, "tool_use"))
+        self.actions_on()
+        for mode, want in (("icon", "◈"), ("1", "◈ chan-statusbar"), ("0", None)):
+            os.environ["RETRO_HUD_SESSION_NAME"] = mode
+            payload = self.payload()
+            payload["session_name"] = "chan-statusbar"
+            rows = sl.render(payload, 160, NOW)
+            links = self.name_links(rows[0])
+            if want is None:
+                self.assertEqual(links, [], mode)
+                self.assertNotIn("◈", sl.strip_ansi(rows[0]))
+            else:
+                self.assertEqual([sl.strip_ansi(t) for _, t in links], [want], (mode, rows[0]))
+        os.environ.pop("RETRO_HUD_SESSION_NAME", None)
+
     def test_session_name_segment_links_to_the_agent_menu(self):
         self.tx(asst(NOW - 2, "tool_use"))
         self.actions_on()

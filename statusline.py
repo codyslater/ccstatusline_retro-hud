@@ -64,6 +64,7 @@ Env toggles:
                                  2.x names cat, robot, ghost map to beast,
                                  bot, blob); with the creature off, the
                                  text-art set: alien, cat, robot, ghost
+    RETRO_HUD_SESSION_NAME=1     the ◈ session-name segment: 1, icon (◈ only), 0
     RETRO_HUD_AGENT_NAME=<name>  prefix state bubbles ("Nova: ready")
     RETRO_HUD_BUBBLES=alerts     what the creature may say: alerts (default) =
                                  only "need you" / "compact?" / "limit soon"
@@ -2567,13 +2568,19 @@ def render(data, cols, now):
     def vim_seg():
         return VIM_COLORS.get(vim_mode, NEON_CYAN) + "[" + vim_mode[0] + "]" + R
 
+    # RETRO_HUD_SESSION_NAME: 1 (default) the session's name, icon just the ◈
+    # (CS: the auto-generated name takes space), 0 nothing; the ◈ stays the
+    # agent menu's link either way
+    name_mode = os.environ.get("RETRO_HUD_SESSION_NAME", "1").strip().lower()
+
     def session_seg(name):  # the name beside the creature is the agent menu's link
-        return DIM + action("agent", "◈ " + name) + R
+        return DIM + action("agent", "◈" if name_mode == "icon" else "◈ " + name) + R
 
     # Auto-generated session names run long — cap them before layout.
     t_model, t_dir, t_branch = model, dir_name, branch
     t_session = trunc(session_name, 28)
-    show_pr, show_vim, show_session = pr_num > 0, bool(vim_mode), bool(session_name)
+    show_pr, show_vim = pr_num > 0, bool(vim_mode)
+    show_session = bool(session_name) and name_mode != "0"
 
     for step in range(9):
         segs = [model_seg(t_model), dir_seg(t_dir)]

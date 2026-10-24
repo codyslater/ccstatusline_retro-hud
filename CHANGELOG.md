@@ -30,6 +30,9 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   only those actions; context, cost and the rate-limit gauges render
   plain. For terminals that underline every hyperlink.
 
+- **`RETRO_HUD_SESSION_NAME`**: `icon` shrinks the `◈ name` segment to the
+  `◈` alone (still the agent menu's link), `0` drops it.
+
 ### Changed
 - **Duration ↔ cost field rounds hard** so its width stays put as it
   flips: whole hours from 1h (`2h`), minutes to the nearest five below,
