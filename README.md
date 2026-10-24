@@ -7,9 +7,9 @@
 ![deps](https://img.shields.io/badge/dependencies-none-purple)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-![retro-hud in Claude Code: a generic demo session](retro-hud-live.png)
+![retro-hud in Claude Code: a generic demo session](docs/media/hud-3.1.1.png)
 
-![the creature at work: walking while the agent works, bouncing with a ? when it needs you, waving when the turn is yours, dimming when idle](retro-hud-demo.gif)
+![the creature at work: walking while the agent works, bouncing with a ? when it needs you, waving when the turn is yours, dimming when idle](docs/media/creature-3.1.1.gif)
 
 Two rows in a closed $\color{#00ff00}{\textsf{neon green}}$ wireframe with
 $\color{#00ffff}{\textsf{cyan}}$ `//` separators and a [pixel creature](#agent-presence)
@@ -387,7 +387,7 @@ Run several Claude sessions in tmux and the bar keeps them in view:
 └─█▋   42% // 23%  ▏█|██▍ 61% // +128/-37 // $4.2 // ▣ 3 ⚑ 1 ──────────┘
 ```
 
-![four Claude sessions in tmux: the creature's cloud, the session list, a switch to the one that needs you, ⌂ home, ↩ back, the model picker and the diff](retro-hud-sessions.gif)
+![four Claude sessions in tmux: the creature's cloud, the session list, a switch to the one that needs you, ⌂ home, ↩ back, the model picker and the diff](docs/media/sessions-3.1.1.gif)
 
 `▣ 3` is the other Claude sessions this machine knows (from the presence
 cache the HUD already writes), `⚑ 1` how many of them need you. Click it
