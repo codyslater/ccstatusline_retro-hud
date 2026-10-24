@@ -1612,20 +1612,37 @@ class TestHandlerCard(TestHandlerAgent):
         self.run_handler(self.url("card"), FAKE_TMUX_PANE_CMD="vim")
         self.assertEqual(self.tmux_calls("display-popup"), [])
 
-    def test_card_is_detached_inside_the_binding(self):
-        import time
+    def test_card_inside_the_binding_is_a_speech_cloud_at_the_pointer(self):
         self.map_pane()
+        self.put_state({"state": "working", "since": 1700000000, "ctx_pct": 32, "limit_pct": 19, "cost": 160.7,
+                        "model": "Opus 5.5", "effort": "max", "dur_s": 28200})
         menu_file = os.path.join(self.tmp, "m.tmux")
         with open(menu_file, "w") as f:
             f.write("stale\n")
         p = self.run_handler(self.url("card"), RETRO_HUD_MENU_FILE=menu_file, RETRO_HUD_CLIENT="/dev/pts/3")
         self.assertEqual(p.returncode, 0, p.stderr.decode())
-        self.assertFalse(os.path.exists(menu_file))
-        for _ in range(50):
-            if self.tmux_calls("display-popup"):
-                break
-            time.sleep(0.1)
-        self.popup()
+        self.assertEqual(self.tmux_calls("display-popup"), [])          # nothing runs here
+        with open(menu_file) as f:
+            line = f.read()
+        self.assertTrue(line.startswith("display-popup -c '/dev/pts/3' -x M -y '#{popup_mouse_y}' -w "), line)
+        self.assertIn("-b rounded", line)
+        runner_path = re.search(r"cloud\.[A-Za-z0-9]+\.sh", line)
+        self.assertTrue(runner_path, line)
+        with open(os.path.join(self.home, ".cache", "retro-hud", runner_path.group(0))) as f:
+            runner = f.read()
+        cat = re.search(r"cat '([^']+)'", runner)
+        with open(cat.group(1)) as f:
+            text = sl.strip_ansi(f.read())
+        lines = text.rstrip("\n").split("\n")
+        self.assertTrue(lines[0].startswith("agent · working for "), lines)
+        self.assertEqual(lines[1], "context 32% · limit 19% · $160.70 · 7h50m")
+        self.assertEqual(lines[2], "m menu · c card · any key closes")
+        self.assertEqual(len(lines), 3)                                  # highlights only
+        self.assertIn("-h 5 ", line)
+        self.assertIn("run-shell -b -d 0.3", runner)
+        self.assertIn("retro-hud://agent?pane=%257", runner)
+        self.assertIn("retro-hud://card?pane=%257", runner)
+        self.assertIn("rm -f", runner)
 
     def test_local_extension_may_render_the_card_itself(self):
         self.map_pane()

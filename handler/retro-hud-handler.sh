@@ -656,6 +656,50 @@ show_card() {  # pane; after agent_target
     fi
 }
 
+# The speech cloud (CS 20261023: "a more natural dialogue box like from a
+# cartoon cloud over the adjacent area ... just highlights"): inside the
+# right-click binding the card is a small rounded popup at the pointer with
+# the highlights only, written to the menu file like a menu so it carries the
+# press's mouse event (-x M; -y the row below, so it stands above the robot).
+# m: the agent menu, c: the full card (centred), any other key closes. The
+# runner removes its own files: the binding runs it after this script ends.
+show_cloud() {  # pane; after agent_target
+    local pane=$1 body head ctx file runner w h cols rows url
+    if ! safe_path "$SELF" || ! safe_path "$LOG_DIR"; then
+        log "cloud refused: unsafe handler or cache path; install them under plain paths"
+        exit 0
+    fi
+    body=$(state_py card "$AGENT_NAME") || body="$AGENT_NAME · no status yet"
+    head=${body%%$'\n'*}
+    ctx=$(printf '%s\n' "$body" | grep -m1 '^context ' || true)
+    mkdir -p "$LOG_DIR" 2>/dev/null
+    file=$(mktemp "$LOG_DIR/cloud.XXXXXX") && runner=$(mktemp "$LOG_DIR/cloud.XXXXXX.sh") || {
+        log "cloud: cannot write under $LOG_DIR"; exit 0; }
+    {
+        printf '\033[1m%s\033[0m\n' "$head"
+        [ -z "$ctx" ] || printf '%s\n' "$ctx"
+        printf '\033[2m%s\033[0m\n' "m menu · c card · any key closes"
+    } >"$file"
+    url="retro-hud://card?pane=%25${pane#%}${SOCK:+&sock=$SOCK}"
+    printf '#!/bin/bash\nprintf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\nrm -f %s %s\n' \
+        "'$file'" "'$file'" "'$runner'" >"$runner"
+    # the popup must be gone before a menu or another popup may open: a short delay
+    printf '[ "$k" = m ] && exec tmux run-shell -b -d 0.3 %s\n' \
+        "$(tmq "'$SELF' '${url/card?/agent?}'")" >>"$runner"
+    printf '[ "$k" = c ] && exec tmux run-shell -b -d 0.3 %s\nexit 0\n' "$(tmq "'$SELF' '$url'")" >>"$runner"
+    w=$(( $(vis_width <"$file") + 4 ))
+    h=$(( $(wc -l <"$file") + 2 ))
+    read -r cols rows < <(tm display -p -c "$CLIENT" '#{client_width} #{client_height}' 2>/dev/null) || cols="" rows=""
+    [[ ${cols:-} =~ ^[0-9]+$ ]] || cols=80
+    [[ ${rows:-} =~ ^[0-9]+$ ]] || rows=24
+    [ "$w" -le $((cols - 2)) ] || w=$((cols - 2))
+    [ "$h" -le $((rows - 2)) ] || h=$((rows - 2))
+    printf "display-popup -c %s -x M -y '#{popup_mouse_y}' -w %s -h %s -b rounded -S fg=colour51 -T '' -E %s\n" \
+        "$(tmq "$CLIENT")" "$w" "$h" "$(tmq "bash '$runner'")" >"$MENU_FILE.tmp" \
+        && mv -f "$MENU_FILE.tmp" "$MENU_FILE" || { rm -f "$MENU_FILE.tmp" "$file" "$runner"; log "cloud: menu file write failed"; }
+    log "cloud for $pane written to $MENU_FILE"
+}
+
 case $ACTION in
     usage)
         xdg-open "$USAGE_URL" >/dev/null 2>&1 || log "usage: xdg-open failed"
@@ -725,12 +769,12 @@ case $ACTION in
         agent_menu "$PANE"
         ;;
     card)
-        if [ -n "$MENU_FILE" ]; then   # inside the binding: the popup waits, the chain must not
-            ( RETRO_HUD_MENU_FILE="" exec "$SELF" "$URL" ) </dev/null >/dev/null 2>&1 &
-            exit 0
-        fi
         agent_target "$PANE"
-        show_card "$PANE"
+        if [ -n "$MENU_FILE" ]; then   # inside the binding: the speech cloud at the pointer
+            show_cloud "$PANE"
+        else
+            show_card "$PANE"          # the full card, centred (the cloud's c, or a desktop click)
+        fi
         ;;
     # ── agent action: END ──
 esac
