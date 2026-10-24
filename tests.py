@@ -138,7 +138,7 @@ class TestWidth(unittest.TestCase):
 class TestContent(unittest.TestCase):
     def test_full_payload_segments(self):
         plain = "\n".join(sl.strip_ansi(r) for r in sl.render(copy.deepcopy(FULL), 220, NOW))
-        for expect in ("Fable 5", "●", "✧", "some-long-project-name", "#42✓",
+        for expect in ("Fable 5", "●", "some-long-project-name", "#42✓",
                        "[I]", "◈ my-session", "72%", "144.2K/200K", "63%", "81%",
                        "· 3d", "+128", "-37", "cache 95%", "2h", "$3.2",
                        "▐█ reviewer"):
@@ -453,10 +453,10 @@ class TestHomeLink(unittest.TestCase):
     # sha256 of "\n".join(render(FULL, cols, NOW)) as rendered by v2.6.0,
     # before RETRO_HUD_HOME_URL existed: unset must stay byte-identical.
     GOLDEN = {
-        60: "65f3666f428a782a2ab76a050b34db04917e99bd61de7a54763a23f731f500ea",
-        100: "d3acb7d6d65223b2a764b81d37fed41d4815718edff60327f3e612ebe9cc758c",
-        160: "18fbeeb20e697531f44114984381523b65b773a62b4b366e7c5cebde2506563e",
-        220: "a72a0c0fb3fc0836a9181bc99a4c536b75a93d1be564ca58416716a328c4e11f",
+        60: "a4fdf753ed745fca544f6e57c9a99d482a37e4059a5e755dda40e8cbb83fa8a5",
+        100: "be9ada80ebd1bbe05031a2dc351d0b749ac509d54c4ad11fda5b682f185aa37a",
+        160: "9baa504e64d3503702447622a03f0c14ff1754e06c0faa71e46acd9c6ab7972c",
+        220: "797d6cd80633fa81c419f0f106261c390f358b0d5fccfbc77b4d8b8630fca38d",
     }
 
     def setUp(self):
@@ -482,12 +482,13 @@ class TestHomeLink(unittest.TestCase):
             for cols, want in self.GOLDEN.items():
                 self.assertEqual(self.digest(cols), want, "val={!r}".format(val))
 
-    def test_home_glyph_is_last_segment_of_row2(self):
+    def test_home_glyph_sits_inside_the_bottom_corner(self):
         os.environ["RETRO_HUD_HOME_URL"] = self.URL
         rows = sl.render(copy.deepcopy(FULL), 220, NOW)
         self.assertIn("\x1b]8;;" + self.URL + "\a⌂\x1b]8;;\a", rows[1])
         plain = sl.strip_ansi(rows[1])
-        self.assertRegex(plain, r"▐█ reviewer // ⌂ ─+┘$")
+        self.assertRegex(plain, r"▐█ reviewer ─+⌂┘$")          # at the right edge, inside the corner
+        self.assertRegex(sl.strip_ansi(rows[0]), r"─┐$")          # row 1 keeps a rule cell there
         self.assertNotIn("⌂", sl.strip_ansi(rows[0]))
 
     def test_home_glyph_survives_every_width(self):
@@ -514,10 +515,10 @@ class TestClickActionLinks(unittest.TestCase):
     # With actions off the output must stay byte-identical, even in tmux.
     GOLDEN = {
         "FULL": {
-            60: "65f3666f428a782a2ab76a050b34db04917e99bd61de7a54763a23f731f500ea",
-            100: "d3acb7d6d65223b2a764b81d37fed41d4815718edff60327f3e612ebe9cc758c",
-            160: "18fbeeb20e697531f44114984381523b65b773a62b4b366e7c5cebde2506563e",
-            220: "a72a0c0fb3fc0836a9181bc99a4c536b75a93d1be564ca58416716a328c4e11f"},
+            60: "a4fdf753ed745fca544f6e57c9a99d482a37e4059a5e755dda40e8cbb83fa8a5",
+            100: "be9ada80ebd1bbe05031a2dc351d0b749ac509d54c4ad11fda5b682f185aa37a",
+            160: "9baa504e64d3503702447622a03f0c14ff1754e06c0faa71e46acd9c6ab7972c",
+            220: "797d6cd80633fa81c419f0f106261c390f358b0d5fccfbc77b4d8b8630fca38d"},
         "MINIMAL": {
             60: "2f1c609b861da918eb94de12c4d191e24f49ebcb96d9cb3378b9e90d27cc21ba",
             100: "5f69e6d3fd142bff9e82509678975d31d04309b529872f0d73769ee321f8ab71",

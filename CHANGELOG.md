@@ -32,8 +32,26 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
 - **`RETRO_HUD_SESSION_NAME`**: `icon` shrinks the `◈ name` segment to the
   `◈` alone (still the agent menu's link), `0` drops it.
+- **Buttons at the right edge.** The `◈` (icon mode) and the `⌂` home link
+  sit just inside the `┐` and `┘`, like window controls, instead of
+  trailing the segments; one cell is reserved on both rows. When that
+  leaves the frame no room they fall back to segments.
+- **The creature visits the bottom line twice as often** (the downstairs
+  excursion), when row 2 has room.
+- **The card is a speech cloud inside the click binding**: a small rounded
+  popup above the creature with the highlights; `m` opens the menu, `c`
+  the full card, a click on the box or any key closes it.
+- **The diff on a clean tree shows the last commit** instead of a blank
+  pager; `q` closes, the wheel scrolls. A local extension may point the
+  diff at another tree with `RETRO_HUD_DIFF_DIR`.
 
 ### Changed
+- **The `✧` extended-thinking mark is gone** (no longer a Claude Code
+  option); the model box shows the model and the effort dot.
+- **Clicks close popups.** A click inside the cloud or card closes it;
+  the diff pager closes on `q`.
+- **The segment ladder keeps two cells for the frame**, so a bar never
+  prints without its corner because its segments fit exactly.
 - **Duration ↔ cost field rounds hard** so its width stays put as it
   flips: whole hours from 1h (`2h`), minutes to the nearest five below,
   two significant figures of cost (`$3.2`, `$21`, `$210`, `$1.2k`); the
@@ -46,6 +64,9 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 ## [v3.0.0] — 2026-10-22
 
 ### Fixed
+- **Typed actions refused panes where Claude runs under a launcher**
+  (`pane_current_command` is the wrapper): a direct child named `claude`
+  now counts.
 - **Menus closed on the right button's release, and ignored mouse clicks.**
   A `display-menu` the handler runs from outside a key binding has no
   mouse event, and tmux 3.4 then makes it a keyboard-only menu that any

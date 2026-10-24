@@ -1961,6 +1961,7 @@ def render_big(p, rule_top=False):
 
 # ── excursions: now and then the creature explores the rest of the bar ──
 EXCURSION_KINDS = ("stretch", "peek", "crawl", "downstairs", "hang")
+_EXCURSION_PICK = EXCURSION_KINDS + ("downstairs",)   # the bottom line twice as often
 EXCURSION_S = {"stretch": (4, 5), "peek": (6, 12), "crawl": (10, 20),
                "downstairs": (12, 20), "hang": (6, 12)}  # seconds, low–high
 EXCURSION_BUCKET_S = 600  # one excursion per 10 minutes …
@@ -1975,7 +1976,7 @@ def excursion_plan(seed, bucket):
     rand = _mulberry32((int(seed) ^ (int(bucket) * 0x9E3779B1) ^ 0xE5C) & _M32)
     lo, hi = EXCURSION_OFFSET
     start = int(bucket) * EXCURSION_BUCKET_S + lo + int(rand() * (hi - lo))
-    kind = EXCURSION_KINDS[int(rand() * len(EXCURSION_KINDS))]
+    kind = _EXCURSION_PICK[int(rand() * len(_EXCURSION_PICK))]
     a, b = EXCURSION_S[kind]
     return {"kind": kind, "start": start, "dur": a + int(rand() * (b - a + 1)),
             "sit": rand() < 0.5}
@@ -2476,9 +2477,11 @@ def tick_s():
     return int(v) if v.isdigit() and int(v) > 0 else 1
 
 
-def render(data, cols, now):
+def render(data, cols, now, _edges=True):
     """Return [row1, row2] sized to cols, or [head line, row1, row2]
-    with the tall creature (RETRO_HUD_CREATURE=tall)."""
+    with the tall creature (RETRO_HUD_CREATURE=tall). `_edges` False:
+    the ◈ / ⌂ buttons as segments, not at the right edge (the fallback
+    when reserving their cell leaves the frame no room)."""
     global _EMOJI_W
     frame_on = os.environ.get("RETRO_HUD_FRAME", "1") != "0"
     size = creature_size(data)
@@ -2492,7 +2495,6 @@ def render(data, cols, now):
     cwd = str(dig(data, "workspace", "current_dir") or data.get("cwd") or "~")
     model = str(dig(data, "model", "display_name") or dig(data, "model", "id") or "---")
     effort = str(dig(data, "effort", "level") or "")
-    thinking = bool(dig(data, "thinking", "enabled"))
     vim_mode = str(dig(data, "vim", "mode") or "")
     session_name = str(data.get("session_name") or "")
 
@@ -2550,8 +2552,6 @@ def render(data, cols, now):
         if effort in EFFORT_GLYPHS:
             inner += " " + EFFORT_COLORS[effort] + action(
                 "effort", EFFORT_GLYPHS[effort], "&cur=" + effort) + R
-        if thinking:
-            inner += " " + NEON_CYAN + "✧" + R
         return "{}[{} {} {}]{}".format(MODEL_BOX, R, inner, MODEL_BOX, R)
 
     def dir_seg(name):
@@ -2574,13 +2574,29 @@ def render(data, cols, now):
     name_mode = os.environ.get("RETRO_HUD_SESSION_NAME", "1").strip().lower()
 
     def session_seg(name):  # the name beside the creature is the agent menu's link
-        return DIM + action("agent", "◈" if name_mode == "icon" else "◈ " + name) + R
+        return DIM + action("agent", "◈ " + name) + R
+
+    # The two buttons live at the right edge, just inside the corners: ◈ (the
+    # agent menu; RETRO_HUD_SESSION_NAME=icon) before ┐ and ⌂ (RETRO_HUD_HOME_URL)
+    # before ┘, like window controls. With the frame off they fall back to
+    # ordinary segments. One cell is reserved on both rows when either exists.
+    home_url = "".join(ch for ch in os.environ.get("RETRO_HUD_HOME_URL", "")
+                       if ch.isprintable()).strip()
+    home_seg = NEON_GREEN + link(home_url, "⌂") + R if home_url else ""
+    edge1 = DIM + action("agent", "◈") + R if name_mode == "icon" and session_name else ""
+    edge2 = home_seg
+    edge_w = 1 if frame_on and _edges and (edge1 or edge2) else 0
+    full_cols, cols = cols, cols - edge_w
+    frame_room = 2 if frame_on else 0   # the frame's lead space and corner: a row must leave them
 
     # Auto-generated session names run long — cap them before layout.
     t_model, t_dir, t_branch = model, dir_name, branch
     t_session = trunc(session_name, 28)
     show_pr, show_vim = pr_num > 0, bool(vim_mode)
-    show_session = bool(session_name) and name_mode != "0"
+    show_session = bool(session_name) and name_mode != "0" and not (name_mode == "icon" and edge_w)
+    if name_mode == "icon" and not edge_w:  # frame off: the ◈ alone as a segment
+        def session_seg(name):
+            return DIM + action("agent", "◈") + R
 
     for step in range(9):
         segs = [model_seg(t_model), dir_seg(t_dir)]
@@ -2593,7 +2609,7 @@ def render(data, cols, now):
         if show_session:
             segs.append(session_seg(t_session))
         row1 = _join(NEON_GREEN + "┌─" + R, segs)
-        if vislen(row1) <= cols:
+        if vislen(row1) <= cols - frame_room:
             break
         if step == 0:
             show_session = False
@@ -2683,12 +2699,8 @@ def render(data, cols, now):
             parts.append("{}⎇ {}{}".format(NEON_PINK, worktree, R))
         return " ".join(parts)
 
-    # Optional jump-home link: one cell, never dropped by the ladder below.
-    # Control characters are stripped so the URL can't break out of OSC 8.
-    home_url = "".join(ch for ch in os.environ.get("RETRO_HUD_HOME_URL", "")
-                       if ch.isprintable()).strip()
-    home_seg = NEON_GREEN + link(home_url, "⌂") + R if home_url else ""
-
+    # The jump-home link is one cell, never dropped by the ladder below: at the
+    # right edge of row 2 (above), or a segment when the frame is off.
     cost_mode = os.environ.get("RETRO_HUD_COST_MODE", "cycle")
     if cost_mode not in ("cycle", "both"):
         cost_mode = "cycle"
@@ -2725,9 +2737,10 @@ def render(data, cols, now):
         segs.append(cost_seg(show_dur and cost_mode == "cycle"))
         if show_agent:
             segs.append(agent_seg())
-        segs.append(home_seg)
+        if not edge_w:
+            segs.append(home_seg)
         row2 = _join(NEON_GREEN + "└─" + R, segs)
-        if vislen(row2) <= cols:
+        if vislen(row2) <= cols - frame_room:
             break
         if step == 0:
             show_cache = False
@@ -2754,37 +2767,58 @@ def render(data, cols, now):
         except Exception:  # presence is decoration: never cost the bar
             pres = None
 
-    if size == "tall":
-        try:
-            head, top = _frame_creature(row1, cols, frame_on, alien_pct, now, pres,
-                                        creature_look(data, pres), action)
-        except Exception:  # decoration again: a blank head line, a plain rule
-            head, top = R, _frame(row1, cols, "┐", frame_on)
-        return [head, top, _frame(row2, cols, "┘", frame_on)]
-    look = out = None
-    if size in ("tiny", "big"):
-        try:
-            look = creature_look(data, pres)
-            out = excursion_rows(size, row1, row2, cols, frame_on, alien_pct, now, pres, look)
-        except Exception:  # decoration: the creature stays home
-            out = None
-        if out:
-            return list(out)
-    if size == "big":
-        try:
-            return list(_frame_big(row1, row2, cols, frame_on, alien_pct, now, pres,
-                                   look or creature_look(data, pres), action))
-        except Exception:  # decoration: the plain frame
-            return [_frame(row1, cols, "┐", frame_on), _frame(row2, cols, "┘", frame_on)]
-    if size == "tiny":
-        try:
-            top = _frame_tiny(row1, cols, frame_on, alien_pct, now, pres,
-                              look or creature_look(data, pres), action)
-        except Exception:  # decoration: the plain frame
-            top = _frame(row1, cols, "┐", frame_on)
-        return [top, _frame(row2, cols, "┘", frame_on)]
-    return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres, action),
-            _frame(row2, cols, "┘", frame_on)]
+    def assemble():
+        if size == "tall":
+            try:
+                head, top = _frame_creature(row1, cols, frame_on, alien_pct, now, pres,
+                                            creature_look(data, pres), action)
+            except Exception:  # decoration again: a blank head line, a plain rule
+                head, top = R, _frame(row1, cols, "┐", frame_on)
+            return [head, top, _frame(row2, cols, "┘", frame_on)]
+        look = out = None
+        if size in ("tiny", "big"):
+            try:
+                look = creature_look(data, pres)
+                out = excursion_rows(size, row1, row2, cols, frame_on, alien_pct, now, pres, look)
+            except Exception:  # decoration: the creature stays home
+                out = None
+            if out:
+                return list(out)
+        if size == "big":
+            try:
+                return list(_frame_big(row1, row2, cols, frame_on, alien_pct, now, pres,
+                                       look or creature_look(data, pres), action))
+            except Exception:  # decoration: the plain frame
+                return [_frame(row1, cols, "┐", frame_on), _frame(row2, cols, "┘", frame_on)]
+        if size == "tiny":
+            try:
+                top = _frame_tiny(row1, cols, frame_on, alien_pct, now, pres,
+                                  look or creature_look(data, pres), action)
+            except Exception:  # decoration: the plain frame
+                top = _frame(row1, cols, "┐", frame_on)
+            return [top, _frame(row2, cols, "┘", frame_on)]
+        return [_frame(row1, cols, "┐", frame_on, alien_pct, now, pres, action),
+                _frame(row2, cols, "┘", frame_on)]
+
+    rows = assemble()
+    if edge_w and not all(_closed(r, c) for r, c in zip(rows[-2:], "┐┘")):
+        return render(data, full_cols, now, _edges=False)   # no room: buttons as segments
+    if edge_w:
+        rows = [_with_edge(r, "┐", edge1) if i == len(rows) - 2 else
+                _with_edge(r, "┘", edge2) if i == len(rows) - 1 else r
+                for i, r in enumerate(rows)]
+    return rows
+
+
+def _closed(row, corner):
+    return row.endswith(NEON_GREEN + corner + R)
+
+
+def _with_edge(row, corner, edge):
+    """`row` (closed by `corner`) with one cell spliced in before the
+    corner: `edge`, or a rule cell when this row has no button."""
+    tail = NEON_GREEN + corner + R
+    return row[:-len(tail)] + (edge or RULE + "─" + R) + tail
 
 
 # ── entry point ──
