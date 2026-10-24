@@ -1205,14 +1205,14 @@ def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS, width=9):
     or "eye" (a tuple of tuples): 9 for the half-block creature, 10 for
     the braille one (the centre column doubled). Mirrored left/right,
     4-connected, two eyes on row 1 with body between them, at least two
-    cells of legs on row 3. Deterministic per (seed, family, width); after
-    `attempts` candidates that break a rule it returns FALLBACK_GRID (or
-    FALLBACK_TINY at width 10)."""
+    cells of legs on row 3. Deterministic per (seed, family, width); after `attempts` candidates
+    that break a rule it returns FALLBACK_GRID (or FALLBACK_TINY at width
+    10). The robot is built from robot_parts, never grown."""
     family = creature_family(family)
     rand = _mulberry32(seed ^ zlib.crc32(family.encode()))
     last = width - 1
-    for _ in range(attempts):
-        h = _grow(rand, "bot" if family == "robot" else family)  # a 4-row robot is a brick
+    for _ in range(attempts + (family == "robot")):  # the robot is built, never grown
+        h = _robot_half(robot_parts(seed)) if family == "robot" else _grow(rand, family)
         g = [[h[r][min(c, last - c)] for c in range(width)] for r in range(4)]
         seen, todo = {(1, 4)}, [(1, 4)]  # keep what touches the spine
         while todo:
@@ -1236,7 +1236,8 @@ def creature_grid(seed, family="alien", attempts=CREATURE_ATTEMPTS, width=9):
 # rather than grown, so every seed is unmistakably a robot: flat head,
 # square eyes or a visor, boxy torso, arms, legs or treads. Mirrored.
 # "hole" cells (the chest panel or lights) are unlit dots that never
-# blink. At 4 rows (tiny, the half-block pose) the family is the bot brick.
+# blink. At 4 rows (tiny, the half-block pose) the same parts make a
+# 10×4 (9×4) robot: antenna, head with eye holes, body, legs.
 ROBOT_COLS, ROBOT_ROWS = 12, 8
 ROBOT_W = 9               # its box in cells: 12 body dots + 3 each side
 _ROBOT_OPTS = {"antenna": ("one", "two", "dish", "ears", "flat"),
@@ -1259,6 +1260,27 @@ def robot_parts(seed):
     heads = (8, 8, 10) if parts["eyes"] == "squares" else (6, 8, 10)  # squares need room
     parts["head"] = heads[int(rand() * len(heads))]
     return parts
+
+
+def _robot_half(p):
+    """The same robot at 4 rows: one candidate half body (4 rows × 5
+    columns, column 4 the centre) for creature_grid, from robot_parts(p).
+    Antenna or head top | head with one eye hole (two, mirrored) | body,
+    arms out or not | legs, treads or a base (the pole)."""
+    wide = p["head"] > 6
+    head = (1, 2, 3, 4) if wide else (2, 3, 4)
+    top = {"one": (4,), "two": (2,) if wide else (3,), "dish": head[1:],
+           "ears": (0, 1, 2, 3, 4) if wide else (1, 2, 3, 4), "flat": head}[p["antenna"]]
+    eye = (3 if p["eyes"] == "visor" else 2) if wide else 3
+    body = (0, 1, 2, 3, 4) if p["arms"] != "none" else (1, 2, 3, 4)
+    legs = {"treads": (0, 1, 2, 3, 4), "pole": (3, 4)}.get(  # a pole is a short base here
+        p["legs"], (1, 2) if p["torso"] >= 10 else (2,))
+    h = [[None] * 5 for _ in range(4)]
+    for r, cols in enumerate((top, head, body, legs)):
+        for c in cols:
+            h[r][c] = "body"
+    h[1][eye] = "eye"
+    return h
 
 
 def _centred(pattern, width=ROBOT_COLS):

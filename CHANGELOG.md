@@ -13,7 +13,8 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   legs, treads or a pole — so every seed is unmistakably a robot. It is
   12×8 dots and draws in braille on two text rows at `big` (across the two
   HUD lines) and `tall` (the head line and row 1), in a 9-cell box that
-  walks in half cells; at `tiny` it is a 4-dot brick. It walks, hops,
+  walks in half cells; at `tiny` the same parts make a 10×4 robot on the
+  one line (antenna, head with eye holes, body, legs). It walks, hops,
   blinks and breathes, waves its arm tips when the turn is yours, bounces
   with a `?` when it needs you, blinks slowly when idle, powers down flat
   when asleep, shakes on error, jitters in the red zone and widens its
@@ -22,8 +23,8 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
 ### Changed
 - `robot` no longer means the `bot` family: a session whose state file or
-  `RETRO_HUD_SPRITE` says `robot` gets the new robot (the bot brick at
-  `tiny`). `cat` and `ghost` still map to `beast` and `blob`.
+  `RETRO_HUD_SPRITE` says `robot` gets the new robot. `cat` and `ghost`
+  still map to `beast` and `blob`.
 
 ## [v3.0.0] — 2026-10-22
 

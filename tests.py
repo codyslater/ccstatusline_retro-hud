@@ -2836,7 +2836,8 @@ class TestCreatureGrid(unittest.TestCase):
     def test_fallback_body_when_attempts_run_out(self):
         self.check(sl.FALLBACK_GRID, "fallback")
         for fam in sl.FAMILIES:
-            self.assertEqual(sl.creature_grid(5, fam, attempts=0), sl.FALLBACK_GRID)
+            if fam != "robot":  # built from parts, never grown: no fallback
+                self.assertEqual(sl.creature_grid(5, fam, attempts=0), sl.FALLBACK_GRID)
 
     def test_unknown_family_is_the_alien(self):
         self.assertEqual(sl.creature_grid(9, "dragon"), sl.creature_grid(9, "alien"))
@@ -2853,7 +2854,7 @@ class TestCreatureGrid(unittest.TestCase):
             self.assertEqual(legs(sl.creature_grid(seed, "alien")[3]), 3, seed)
             self.assertEqual(legs(sl.creature_grid(seed, "beast")[3]), 2, seed)
             self.assertEqual(legs(sl.creature_grid(seed, "bot")[3]), 2, seed)
-            self.assertEqual(legs(sl.creature_grid(seed, "robot")[3]), 2, seed)
+            self.assertIn(legs(sl.creature_grid(seed, "robot")[3]), (1, 2), seed)  # a pole or treads: 1
 
 
 class TestRobotGrid(unittest.TestCase):
@@ -2932,13 +2933,29 @@ class TestRobotGrid(unittest.TestCase):
         self.assertEqual(sl.robot_grid(7), sl.robot_grid(7))
         self.assertGreater(len({sl.robot_grid(s) for s in range(200)}), 60)
 
-    def test_tiny_and_half_block_bodies_are_a_four_row_brick(self):
-        # at 4 rows (tiny, and the half-block pose) the family is a bot-shaped brick
-        for seed in range(40):
+    def test_four_row_body_is_a_small_robot_with_the_same_parts(self):
+        # at 4 rows (tiny, and the half-block pose) the same parts at 10×4 / 9×4:
+        # antenna row, head with two eye holes, body (arms out or not), legs
+        for seed in range(80):
+            parts = sl.robot_parts(seed)
             for width in (9, 10):
                 g = sl.creature_grid(seed, "robot", width=width)
-                TestCreatureGrid.check(self, g, (seed, width)) if width == 9 else \
-                    TestTinyGrid.check(self, g, (seed, width))
+                label = (seed, width, parts)
+                TestCreatureGrid.check(self, g, label) if width == 9 else TestTinyGrid.check(self, g, label)
+                self.assertTrue(any(g[0]), label)                        # something on top
+                self.assertEqual(sum(1 for v in g[1] if v), (8 if parts["head"] > 6 else 6) - (10 - width),
+                                 label)
+                arms = parts["arms"] != "none"
+                self.assertEqual(bool(g[2][0]) and bool(g[2][-1]), arms, label)
+                last = sum(1 for v in g[3] if v)
+                if parts["legs"] == "treads":
+                    self.assertEqual(last, width, label)
+                elif parts["legs"] == "pole":
+                    self.assertEqual(last, width - 6, label)          # a short base
+                else:
+                    self.assertEqual(last, 4 if parts["torso"] >= 10 else 2, label)
+            self.assertEqual(sl.creature_grid(seed, "robot", attempts=0), sl.creature_grid(seed, "robot"))
+        self.assertGreater(len({sl.creature_grid(s, "robot", width=10) for s in range(120)}), 20)
         self.assertEqual(sl.creature_family("robot"), "robot")
         self.assertEqual(sl.creature_family("bot"), "bot")
 
