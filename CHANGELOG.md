@@ -4,7 +4,7 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
-## [v3.1.0] — 2026-10-23
+## [v3.1.0] — 2026-10-24
 
 ### Added
 - **A `robot` creature family.** Built from parts the seed picks — an
