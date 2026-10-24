@@ -349,6 +349,8 @@ a slash command.
 | rate-limit gauges | opens your usage page (`RETRO_HUD_USAGE_URL`) in the browser |
 | the creature | its status card: state, model, effort, context, limit, cost, duration, lines, dir, a tip; `m` opens the menu (see [Agent presence](#agent-presence)) |
 | session name (`◈ name`) | status card · wave · quiet 1h · sprite ▸ · size ▸ · reroll · status |
+| `▣ N` sessions | the session list: every tmux session running Claude, with its creature's state word and age, the ones that need you first; click one to switch there (see [Sessions](#sessions)) |
+| `⌂` / `↩` outside the frame | home, and back to where you came from (see [Sessions](#sessions)) |
 
 The branch badge and PR number keep their GitHub links.
 
@@ -376,6 +378,60 @@ platform's tool so it runs `retro-hud-handler.sh <url>`.
 for a bar with fewer underlines in terminals that mark every hyperlink.
 Without `RETRO_HUD_ACTIONS` the HUD renders exactly as before. Outside
 tmux only the usage links appear — there's no session to type into.
+
+### Sessions
+
+Run several Claude sessions in tmux and the bar keeps them in view:
+
+```
+└─█▋   42% // 23%  ▏█|██▍ 61% // +128/-37 // $4.2 // ▣ 3 ⚑ 1 ──────────┘
+```
+
+`▣ 3` is the other Claude sessions this machine knows (from the presence
+cache the HUD already writes), `⚑ 1` how many of them need you. Click it
+and a list opens at the pointer:
+
+```
+ sessions (3)
+⇢  first that needs you: review
+review    needs you 30s
+nap       idle 2h
+work      working 1m · here
+```
+
+Needs-you first, then your turn, working, idle, asleep; the session you are
+in is marked and greyed; a click switches the tmux client there. The `⇢`
+row jumps to whoever needs you; bind it to a key too:
+
+```tmux
+bind N run-shell "RETRO_HUD_CLIENT=#{q:client_tty} $HOME/.claude/retro-hud-handler.sh retro-hud://needs"
+```
+
+**Home and back.** Name one session your home (`RETRO_HUD_HOME_SESSION`,
+default `home`) and the bar shows a `⌂` outside the top-right corner in
+every other session; click it to go home. The home session's bar shows a
+`↩` outside the bottom-right instead, which takes you back to the session
+you came from and then disappears. A home session you started in shows
+neither. The column stays reserved either way, so the end bars line up.
+
+**Setup**, on top of the click actions above:
+
+```bash
+# where the statusline runs (your statusline-command.sh, or settings.json's env):
+export RETRO_HUD_SESSIONS=1 RETRO_HUD_HOME_URL=retro-hud://home RETRO_HUD_BACK_URL=retro-hud://back
+# the home session: the bar needs to know when it is there
+_s=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)
+[ "$_s" = home ] && export RETRO_HUD_AT_HOME=1
+```
+
+and, if your home session is not called `home`, `RETRO_HUD_HOME_SESSION=<name>`
+in `~/.config/retro-hud/env` (the handler reads it there) and in the line
+above. Add `sessions` to `RETRO_HUD_ACTIONS` if you use the list form.
+
+The list is built from tmux and the cache alone, so it works for any
+sessions. A local extension (`~/.claude/retro-hud-handler.local.sh`) can
+answer `retro-hud://sessions`, `home` and `back` itself first — that is
+how a session manager with its own notion of sessions plugs in.
 
 **Click in tmux** (3.4+, `mouse on`). Bind a mouse button so a click on
 a HUD link opens the menu *at the pointer*, taking mouse clicks, without

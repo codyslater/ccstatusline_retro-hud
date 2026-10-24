@@ -138,13 +138,13 @@ if [ -f "$LOCAL_EXT" ]; then
 fi
 
 # ── settings: environment first, then the config file, then defaults ──
-cfg_models="" cfg_usage_url="" cfg_agent_name="" cfg_cache_dir=""
+cfg_models="" cfg_usage_url="" cfg_agent_name="" cfg_cache_dir="" cfg_home_session=""
 if [ -f "$CONFIG" ]; then
     n=0
     while IFS= read -r line || [ -n "$line" ]; do
         n=$((n + 1))
         [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
-        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL|RETRO_HUD_AGENT_NAME|RETRO_HUD_CACHE_DIR)=(.*)$ ]]; then
+        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL|RETRO_HUD_AGENT_NAME|RETRO_HUD_CACHE_DIR|RETRO_HUD_HOME_SESSION)=(.*)$ ]]; then
             key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
             if [[ $val =~ ^\"(.*)\"$ || $val =~ ^\'(.*)\'$ ]]; then
                 val=${BASH_REMATCH[1]}
@@ -154,6 +154,7 @@ if [ -f "$CONFIG" ]; then
                 RETRO_HUD_USAGE_URL) cfg_usage_url=$val ;;
                 RETRO_HUD_AGENT_NAME) cfg_agent_name=$val ;;
                 RETRO_HUD_CACHE_DIR) cfg_cache_dir=$val ;;
+                RETRO_HUD_HOME_SESSION) cfg_home_session=$val ;;
             esac
         else
             log "config: ignored line $n of $CONFIG"
@@ -584,7 +585,7 @@ fi
 # ── URL form ──
 [ $# -eq 1 ] || reject "expected one argument, got $#"
 URL=$1
-re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent|card|sessions|needs|switch)(\?([A-Za-z0-9_=&%.:/~+-]*))?$'
+re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent|card|sessions|needs|switch|home|back)(\?([A-Za-z0-9_=&%.:/~+-]*))?$'
 [[ $URL =~ $re ]] || reject "$(printf '%q' "$URL")"
 ACTION=${BASH_REMATCH[1]}
 QUERY=${BASH_REMATCH[3]}
@@ -614,7 +615,7 @@ for pair in "${pairs[@]}"; do
     esac
 done
 
-case $ACTION in usage | sessions | needs | switch) need_pane=0 ;; *) need_pane=1 ;; esac
+case $ACTION in usage | sessions | needs | switch | home | back) need_pane=0 ;; *) need_pane=1 ;; esac
 if [ "$need_pane" = 1 ] || [ -n "$PANE" ]; then
     [[ $PANE =~ ^%[0-9]+$ ]] || reject "$ACTION: bad pane $(printf '%q' "$PANE")"
 fi
@@ -841,6 +842,46 @@ for x in json.load(sys.stdin):
     show_menu " sessions ($n) " "${items[@]}"
 }
 
+# ⌂ and ↩ (RETRO_HUD_HOME_URL / RETRO_HUD_BACK_URL on the bar): home is the tmux
+# session named by RETRO_HUD_HOME_SESSION (env or the config file; default "home").
+# A ⌂ click records the session it came from in <cache>/home-from, which the bar
+# reads to show ↩ on the home session; ↩ goes back there and clears the record.
+home_from_file() {
+    local d
+    d=$(presence_cache) || return 1
+    printf '%s/home-from' "$d"
+}
+
+go_home() {
+    local home=${RETRO_HUD_HOME_SESSION:-${cfg_home_session:-home}} cur f
+    need_client
+    [[ $home =~ ^[A-Za-z0-9_.:@-]+$ ]] || reject "home: bad RETRO_HUD_HOME_SESSION $(printf '%q' "$home")"
+    cur=$(tm display -p -c "$CLIENT" '#{session_name}' 2>/dev/null) || cur=""
+    if [ "$cur" = "$home" ]; then
+        tm display-message -c "$CLIENT" -d 1500 "retro-hud: already home" || true
+        return 0
+    fi
+    if [[ $cur =~ ^[A-Za-z0-9_.:@-]+$ ]] && f=$(home_from_file); then
+        mkdir -p "$(dirname "$f")" 2>/dev/null
+        printf '%s\n' "$cur" >"$f.tmp" && mv -f "$f.tmp" "$f" || log "home-from not written"
+    fi
+    switch_to "$home"
+}
+
+go_back() {
+    local f from=""
+    need_client
+    if f=$(home_from_file) && [ -f "$f" ]; then
+        from=$(head -c 256 "$f" | tr -d '\n')
+        rm -f "$f"
+    fi
+    if [[ $from =~ ^[A-Za-z0-9_.:@-]+$ ]]; then
+        switch_to "$from"
+    else
+        tm switch-client -c "$CLIENT" -l 2>/dev/null || go_home
+    fi
+}
+
 switch_to() {  # session name: switch the clicking client there
     need_client
     tm switch-client -c "$CLIENT" -t "=$1" 2>/dev/null || {
@@ -951,6 +992,12 @@ print(r[0]["name"] if r else "")' 2>/dev/null) || first=""
     switch)
         [ -n "$TO" ] || reject "switch: no session named (to=)"
         switch_to "$TO"
+        ;;
+    home)
+        go_home
+        ;;
+    back)
+        go_back
         ;;
     card)
         agent_target "$PANE"

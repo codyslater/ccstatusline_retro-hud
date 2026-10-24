@@ -30,6 +30,14 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   only those actions; context, cost and the rate-limit gauges render
   plain. For terminals that underline every hyperlink.
 
+- **A session switcher for everyone.** `RETRO_HUD_SESSIONS=1` puts `▣ N`
+  on the bar (the other Claude sessions the presence cache knows, `⚑ M`
+  needing you); a click opens `retro-hud://sessions`, a list at the
+  pointer of every tmux session running Claude with its state word and
+  age, needs-you first, click to switch. `retro-hud://needs` jumps to the
+  first that needs you (bind it to a key), `retro-hud://switch?to=<name>`
+  goes to one, `retro-hud://home` to `RETRO_HUD_HOME_SESSION` and
+  `retro-hud://back` to where a home click came from. README, "Sessions".
 - **`RETRO_HUD_SESSION_NAME=0`** drops the `◈ name` segment; the creature's
   cloud reaches the agent menu with `m`, so no button is needed.
 - **The home button stands outside the frame, and a return button

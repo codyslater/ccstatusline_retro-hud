@@ -29,6 +29,8 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_MARGIN` | `4` | columns kept free at the right edge (Claude Code's prompt footer insets the status line by 4) |
 | `RETRO_HUD_WIDTH` | — | hard width override when `$COLUMNS` is wrong |
 | `RETRO_HUD_EMOJI` | `2` | `1`: count emoji as one cell; `0`: skip the folder emoji |
+| `RETRO_HUD_SESSIONS` | — | `1` adds `▣ N` to row 2: the other Claude sessions the presence cache knows, `⚑ M` of them needing you; a click opens the handler's session list (`retro-hud://sessions`) |
+| `RETRO_HUD_HOME_SESSION` | `home` | the tmux session the `⌂` goes to; also read from `~/.config/retro-hud/env` by the handler |
 | `RETRO_HUD_AT_HOME` | — | `1` when this session is the home session: the `⌂` is not shown there; after a `⌂` click a `↩` shows instead (see `RETRO_HUD_BACK_URL`) |
 | `RETRO_HUD_BACK_URL` | — | the return button's URL (`↩`, outside the frame past the `┘`): shown on the home session while `<cache>/home-from` names the session a `⌂` click came from; the handler writes that file on a home click and removes it on a return |
 | `RETRO_HUD_HOME_URL` | — | a hyperlinked `⌂` outside the frame at the far right (past the `┐`; the blank cell under it carries the same link, so either row clicks); the column stays reserved on the home session so the end bars line up: a jump-home link for multi-session setups. Point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions. Unset or empty: no glyph |

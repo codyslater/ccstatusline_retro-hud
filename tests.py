@@ -1673,6 +1673,42 @@ class TestHandlerSessions(TestHandlerAgent):
         self.assertEqual(len(self.tmux_calls("switch-client")), 1)
 
 
+class TestHandlerHomeBack(TestHandlerAgent):
+    """retro-hud://home switches to the home session and records where it came from;
+    retro-hud://back returns there (else tmux's last session) and clears the record."""
+
+    def home_from(self):
+        return os.path.join(self.cache, "home-from")
+
+    def test_home_records_the_origin_and_switches(self):
+        self.run_handler("retro-hud://home", FAKE_TMUX_CLIENT_SESSION="work", RETRO_HUD_HOME_SESSION="base")
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=base"]])
+        with open(self.home_from()) as f:
+            self.assertEqual(f.read(), "work\n")
+
+    def test_already_home_says_so(self):
+        self.run_handler("retro-hud://home", FAKE_TMUX_CLIENT_SESSION="home")   # the default home name
+        self.assertEqual(self.tmux_calls("switch-client"), [])
+        self.assertTrue(any("already home" in " ".join(m) for m in self.tmux_calls("display-message")))
+        self.assertFalse(os.path.exists(self.home_from()))
+
+    def test_back_returns_to_the_record_then_falls_to_last(self):
+        os.makedirs(self.cache, exist_ok=True)
+        with open(self.home_from(), "w") as f:
+            f.write("work\n")
+        self.run_handler("retro-hud://back")
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=work"]])
+        self.assertFalse(os.path.exists(self.home_from()))
+        self.run_handler("retro-hud://back")
+        self.assertEqual(self.tmux_calls("switch-client")[-1], ["switch-client", "-c", "/dev/pts/3", "-l"])
+
+    def test_home_session_name_is_checked(self):
+        self.run_handler("retro-hud://home", RETRO_HUD_HOME_SESSION="a b")
+        self.assertEqual(self.tmux_calls("switch-client"), [])
+        with open(os.path.join(self.home, ".cache", "retro-hud", "handler.log")) as f:
+            self.assertIn("bad RETRO_HUD_HOME_SESSION", f.read())
+
+
 class TestHandlerCard(TestHandlerAgent):
     """The `card` action: the creature's status card, a popup from the
     state file's facts plus one tip; any key closes it, m opens the menu."""
