@@ -816,12 +816,11 @@ case $ACTION in
         guard=""
         [ -z "$POPUP_MARK" ] || guard="touch $(tmq "$POPUP_MARK"); trap $(tmq "rm -f '$POPUP_MARK'") EXIT; "
         # A clean tree shows the last commit instead of a blank pager (CS 20261023: "diff
-        # sometimes showing up blank"); Esc closes as well as q, the wheel scrolls.
-        mkdir -p "$LOG_DIR" 2>/dev/null
-        printf '\\e quit\n' >"$LOG_DIR/lesskey" 2>/dev/null || true
+        # sometimes showing up blank"). q closes, the wheel scrolls (--mouse). No Esc binding:
+        # with the mouse on, every wheel report starts with Esc and would quit the pager.
         body="d=\$($git_safe 2>&1); if [ -z \"\$d\" ]; then printf '\\033[1mworking tree clean\\033[0m · the last commit:\\n\\n'; $git_last; else $git_safe --stat; echo; printf '%s\\n' \"\$d\"; fi"
-        tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) · q or Esc closes " -E \
-            "$guard{ $body; } 2>&1 | LESSSECURE=1 LESSKEYIN=$(tmq "$LOG_DIR/lesskey") less -R --mouse -P' q or Esc closes · wheel scrolls '" ||
+        tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) · q closes " -E \
+            "$guard{ $body; } 2>&1 | LESSSECURE=1 less -R --mouse -P' q closes · wheel scrolls '" ||
             log "display-popup failed"
         ;;
     # ── agent action: BEGIN ──

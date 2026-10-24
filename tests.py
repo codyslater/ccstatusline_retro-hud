@@ -1048,11 +1048,10 @@ class TestHandlerActions(ShellHarness):
         cmd = self.diff_popup(self.url("diff"))[-1]
         for flag in ("GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0",
                      "-c core.fsmonitor=false", "-c diff.external=", "-c core.pager=",
-                     "--no-pager", "--no-ext-diff", "--no-textconv", "LESSSECURE=1", "LESSKEYIN=",
+                     "--no-pager", "--no-ext-diff", "--no-textconv", "LESSSECURE=1",
                      "--mouse", "working tree clean", "show --stat --patch"):
             self.assertIn(flag, cmd)
-        with open(os.path.join(self.home, ".cache", "retro-hud", "lesskey")) as f:
-            self.assertEqual(f.read(), "\\e quit\n")                       # Esc closes the pager
+        self.assertNotIn("LESSKEYIN", cmd)   # an Esc binding would quit on every wheel report
 
     @unittest.skipUnless(shutil.which("git"), "git not installed")
     def test_diff_popup_command_ignores_a_hostile_repo_config(self):
