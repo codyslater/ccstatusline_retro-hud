@@ -2576,15 +2576,17 @@ def render(data, cols, now, _edges=True):
     def session_seg(name):  # the name beside the creature is the agent menu's link
         return DIM + action("agent", "◈ " + name) + R
 
-    # The two buttons live at the right edge, just inside the corners: ◈ (the
-    # agent menu; RETRO_HUD_SESSION_NAME=icon) before ┐ and ⌂ (RETRO_HUD_HOME_URL)
-    # before ┘, like window controls. With the frame off they fall back to
-    # ordinary segments. One cell is reserved on both rows when either exists.
+    # The buttons live at the right edge, just inside the corners, like window
+    # controls: ⌂ (RETRO_HUD_HOME_URL) before ┐ on row 1, and ◈ (the agent menu,
+    # RETRO_HUD_SESSION_NAME=icon) before ┘ on row 2 — the creature's cloud
+    # reaches that menu too, so most people need only the ⌂. With the frame
+    # off they fall back to ordinary segments. One cell is reserved on both
+    # rows when either exists.
     home_url = "".join(ch for ch in os.environ.get("RETRO_HUD_HOME_URL", "")
                        if ch.isprintable()).strip()
     home_seg = NEON_GREEN + link(home_url, "⌂") + R if home_url else ""
-    edge1 = DIM + action("agent", "◈") + R if name_mode == "icon" and session_name else ""
-    edge2 = home_seg
+    edge2 = DIM + action("agent", "◈") + R if name_mode == "icon" and session_name else ""
+    edge1 = home_seg
     edge_w = 1 if frame_on and _edges and (edge1 or edge2) else 0
     full_cols, cols = cols, cols - edge_w
     frame_room = 2 if frame_on else 0   # the frame's lead space and corner: a row must leave them

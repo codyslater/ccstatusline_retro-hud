@@ -809,14 +809,17 @@ case $ACTION in
         # pager) are switched off, and less runs in secure mode.
         git_base="GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false"
         git_base+=" -c diff.external= -c core.pager= --no-pager"
-        git_safe="$git_base diff --no-ext-diff --no-textconv --color=always"
-        git_last="$git_base show --stat --patch --no-ext-diff --no-textconv --color=always HEAD"
+        git_safe="$git_base diff --no-ext-diff --no-textconv --color=always --no-prefix"
+        git_last="$git_base show --stat --patch --no-ext-diff --no-textconv --color=always --no-prefix HEAD"
+        # the pager's text: a summary line, the file list, then hunks; git's plumbing lines
+        # (diff --git, index …) are dropped, file headers read --- app.py / +++ app.py
+        tidy="sed -E 's/^(\x1b\[[0-9;]*m)*(diff --git|index )[^\n]*//; /^$/N; /^\n$/D'"
         guard=""
         [ -z "$POPUP_MARK" ] || guard="touch $(tmq "$POPUP_MARK"); trap $(tmq "rm -f '$POPUP_MARK'") EXIT; "
         # A clean tree shows the last commit instead of a blank pager. q closes, the wheel
         # scrolls (--mouse). No Esc binding:
         # with the mouse on, every wheel report starts with Esc and would quit the pager.
-        body="d=\$($git_safe 2>&1); if [ -z \"\$d\" ]; then printf '\\033[1mworking tree clean\\033[0m · the last commit:\\n\\n'; $git_last; else $git_safe --stat; echo; printf '%s\\n' \"\$d\"; fi"
+        body="d=\$($git_safe 2>&1); if [ -z \"\$d\" ]; then printf '\\033[1mworking tree clean\\033[0m · the last commit\\n\\n'; $git_last | $tidy; else printf '\\033[1muncommitted changes\\033[0m · %s\\n\\n' \"\$($git_safe --shortstat | sed 's/^ *//')\"; $git_safe --stat | sed '\$d'; echo; printf '%s\\n' \"\$d\" | $tidy; fi"
         tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) · q closes " -E \
             "$guard{ $body; } 2>&1 | LESSSECURE=1 less -R --mouse -P' q closes · wheel scrolls '" ||
             log "display-popup failed"

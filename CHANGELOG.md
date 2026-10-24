@@ -32,10 +32,10 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
 - **`RETRO_HUD_SESSION_NAME`**: `icon` shrinks the `◈ name` segment to the
   `◈` alone (still the agent menu's link), `0` drops it.
-- **Buttons at the right edge.** The `◈` (icon mode) and the `⌂` home link
-  sit just inside the `┐` and `┘`, like window controls, instead of
-  trailing the segments; one cell is reserved on both rows. When that
-  leaves the frame no room they fall back to segments.
+- **Buttons at the right edge.** The `⌂` home link sits just inside the
+  `┐` and the `◈` (icon mode) inside the `┘`, like window controls,
+  instead of trailing the segments; one cell is reserved on both rows.
+  When that leaves the frame no room they fall back to segments.
 - **The creature visits the bottom line twice as often** (the downstairs
   excursion), when row 2 has room.
 - **The card is a speech cloud inside the click binding**: a small rounded

@@ -485,18 +485,19 @@ class TestHomeLink(unittest.TestCase):
     def test_home_glyph_sits_inside_the_bottom_corner(self):
         os.environ["RETRO_HUD_HOME_URL"] = self.URL
         rows = sl.render(copy.deepcopy(FULL), 220, NOW)
-        self.assertIn("\x1b]8;;" + self.URL + "\a⌂\x1b]8;;\a", rows[1])
+        self.assertIn("\x1b]8;;" + self.URL + "\a⌂\x1b]8;;\a", rows[0])
         plain = sl.strip_ansi(rows[1])
-        self.assertRegex(plain, r"▐█ reviewer ─+⌂┘$")          # at the right edge, inside the corner
-        self.assertRegex(sl.strip_ansi(rows[0]), r"─┐$")          # row 1 keeps a rule cell there
-        self.assertNotIn("⌂", sl.strip_ansi(rows[0]))
+        self.assertRegex(plain, r"▐█ reviewer ─+─┘$")           # row 2 keeps a rule cell there
+        self.assertRegex(sl.strip_ansi(rows[0]), r"─⌂┐$")         # at the top-right, inside the corner
+        self.assertNotIn("⌂", plain)
 
     def test_home_glyph_survives_every_width(self):
         os.environ["RETRO_HUD_HOME_URL"] = self.URL
         for payload in (FULL, MINIMAL, OVERLOAD, {}):
             for cols in range(20, 241, 5):
                 rows = sl.render(copy.deepcopy(payload), cols, NOW)
-                self.assertIn("⌂", sl.strip_ansi(rows[1]), "cols={}".format(cols))
+                # top-right inside the corner; a segment on row 2 when the frame has no room
+                self.assertIn("⌂", sl.strip_ansi(rows[0]) + sl.strip_ansi(rows[1]), "cols={}".format(cols))
                 if cols < 50:  # same floor as TestWidth's fit guarantee
                     continue
                 for row in rows:
@@ -504,7 +505,7 @@ class TestHomeLink(unittest.TestCase):
 
     def test_control_chars_in_url_cannot_escape_the_link(self):
         os.environ["RETRO_HUD_HOME_URL"] = "x://a\x07\x1b[31mb\nc"
-        row = sl.render(copy.deepcopy(MINIMAL), 160, NOW)[1]
+        row = sl.render(copy.deepcopy(MINIMAL), 160, NOW)[0]
         self.assertIn("\x1b]8;;x://a[31mbc\a⌂", row)
         self.assertNotIn("\n", row)
 
@@ -2394,12 +2395,14 @@ class TestAgentLink(PresenceCase):
             payload = self.payload()
             payload["session_name"] = "polish-the-hud"
             rows = sl.render(payload, 160, NOW)
-            links = self.name_links(rows[0])
+            links = self.name_links(rows[1] if mode == "icon" else rows[0])   # the icon: bottom-right
             if want is None:
                 self.assertEqual(links, [], mode)
-                self.assertNotIn("◈", sl.strip_ansi(rows[0]))
+                self.assertNotIn("◈", sl.strip_ansi(rows[0]) + sl.strip_ansi(rows[1]))
             else:
-                self.assertEqual([sl.strip_ansi(t) for _, t in links], [want], (mode, rows[0]))
+                self.assertEqual([sl.strip_ansi(t) for _, t in links], [want], (mode, rows))
+            if mode == "icon":
+                self.assertRegex(sl.strip_ansi(rows[1]), r"◈┘$")
         os.environ.pop("RETRO_HUD_SESSION_NAME", None)
 
     def test_session_name_segment_links_to_the_agent_menu(self):
@@ -2594,7 +2597,7 @@ class TestBubbles(PresenceCase):
         self.tx(asst(NOW - 2, "tool_use"))
         self.events({"ts": NOW, "text": "a\x1b[31mb\x07c\nd" + "z" * 40, "ttl": 60})
         row = sl.render(self.payload(), 160, NOW)[0]
-        self.assertNotIn("\x07", row)
+        self.assertNotIn("\x07", re.sub(r"\x1b\]8;;[^\x07]*\x07", "", row))   # the ⌂ link's own OSC 8 aside
         self.assertNotIn("\x1b[31m", row)
         plain = sl.strip_ansi(row)
         m = re.search(r"╴([^─]+)|([^─ ]+)╶", plain)
