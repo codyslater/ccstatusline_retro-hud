@@ -703,7 +703,9 @@ show_card() {  # pane; after agent_target
 # cartoon cloud over the adjacent area ... just highlights"): inside the
 # right-click binding the card is a small rounded popup at the pointer with
 # the highlights only, written to the menu file like a menu so it carries the
-# press's mouse event (-x M; -y the row below, so it stands above the robot).
+# press's mouse event (-x M; -y the row below the box, so it stands ABOVE the
+# robot: CS 20261023 "open above the monster"). A click on the box or any key
+# closes it; tmux hands a click outside a popup to nobody.
 # m: the agent menu, c: the full card (centred), any other key closes. The
 # runner removes its own files: the binding runs it after this script ends.
 show_cloud() {  # pane; after agent_target
@@ -721,7 +723,7 @@ show_cloud() {  # pane; after agent_target
     {
         printf '\033[1m%s\033[0m\n' "$head"
         [ -z "$ctx" ] || printf '%s\n' "$ctx"
-        printf '\033[2m%s\033[0m\n' "m menu · c card · any key closes"
+        printf '\033[2m%s\033[0m\n' "m menu · c card · click or key closes"
     } >"$file"
     url="retro-hud://card?pane=%25${pane#%}${SOCK:+&sock=$SOCK}"
     { printf '#!/bin/bash\n'; popup_guard
@@ -738,7 +740,7 @@ show_cloud() {  # pane; after agent_target
     [[ ${rows:-} =~ ^[0-9]+$ ]] || rows=24
     [ "$w" -le $((cols - 2)) ] || w=$((cols - 2))
     [ "$h" -le $((rows - 2)) ] || h=$((rows - 2))
-    printf "display-popup -c %s -x M -y '#{e|+:#{popup_mouse_y},2}' -w %s -h %s -b rounded -S fg=colour51 -T '' -E %s\n" \
+    printf "display-popup -c %s -x M -y '#{popup_mouse_y}' -w %s -h %s -b rounded -S fg=colour51 -T '' -E %s\n" \
         "$(tmq "$CLIENT")" "$w" "$h" "$(tmq "bash '$runner'")" >"$MENU_FILE.tmp" \
         && mv -f "$MENU_FILE.tmp" "$MENU_FILE" || { rm -f "$MENU_FILE.tmp" "$file" "$runner"; log "cloud: menu file write failed"; }
     log "cloud for $pane written to $MENU_FILE"
@@ -807,12 +809,19 @@ case $ACTION in
         # shell text. The repo's own config must not run anything, so the
         # config-driven program hooks (fsmonitor, external diff, textconv,
         # pager) are switched off, and less runs in secure mode.
-        git_safe="GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false"
-        git_safe+=" -c diff.external= -c core.pager= --no-pager diff --no-ext-diff --no-textconv"
+        git_base="GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false"
+        git_base+=" -c diff.external= -c core.pager= --no-pager"
+        git_safe="$git_base diff --no-ext-diff --no-textconv --color=always"
+        git_last="$git_base show --stat --patch --no-ext-diff --no-textconv --color=always HEAD"
         guard=""
         [ -z "$POPUP_MARK" ] || guard="touch $(tmq "$POPUP_MARK"); trap $(tmq "rm -f '$POPUP_MARK'") EXIT; "
-        tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) " -E \
-            "$guard{ $git_safe --stat --color=always; echo; $git_safe --color=always; } 2>&1 | LESSSECURE=1 less -R" ||
+        # A clean tree shows the last commit instead of a blank pager (CS 20261023: "diff
+        # sometimes showing up blank"); Esc closes as well as q, the wheel scrolls.
+        mkdir -p "$LOG_DIR" 2>/dev/null
+        printf '\\e quit\n' >"$LOG_DIR/lesskey" 2>/dev/null || true
+        body="d=\$($git_safe 2>&1); if [ -z \"\$d\" ]; then printf '\\033[1mworking tree clean\\033[0m · the last commit:\\n\\n'; $git_last; else $git_safe --stat; echo; printf '%s\\n' \"\$d\"; fi"
+        tm display-popup -c "$CLIENT" -d "$dir" -w 90% -h 90% -T " git diff (read-only) · q or Esc closes " -E \
+            "$guard{ $body; } 2>&1 | LESSSECURE=1 LESSKEYIN=$(tmq "$LOG_DIR/lesskey") less -R --mouse -P' q or Esc closes · wheel scrolls '" ||
             log "display-popup failed"
         ;;
     # ── agent action: BEGIN ──

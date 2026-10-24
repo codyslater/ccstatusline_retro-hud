@@ -1048,8 +1048,11 @@ class TestHandlerActions(ShellHarness):
         cmd = self.diff_popup(self.url("diff"))[-1]
         for flag in ("GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0",
                      "-c core.fsmonitor=false", "-c diff.external=", "-c core.pager=",
-                     "--no-pager", "--no-ext-diff", "--no-textconv", "LESSSECURE=1"):
+                     "--no-pager", "--no-ext-diff", "--no-textconv", "LESSSECURE=1", "LESSKEYIN=",
+                     "--mouse", "working tree clean", "show --stat --patch"):
             self.assertIn(flag, cmd)
+        with open(os.path.join(self.home, ".cache", "retro-hud", "lesskey")) as f:
+            self.assertEqual(f.read(), "\\e quit\n")                       # Esc closes the pager
 
     @unittest.skipUnless(shutil.which("git"), "git not installed")
     def test_diff_popup_command_ignores_a_hostile_repo_config(self):
@@ -1665,7 +1668,7 @@ class TestHandlerCard(TestHandlerAgent):
         self.assertEqual(self.tmux_calls("display-popup"), [])          # nothing runs here
         with open(menu_file) as f:
             line = f.read()
-        self.assertTrue(line.startswith("display-popup -c '/dev/pts/3' -x M -y '#{e|+:#{popup_mouse_y},2}' -w "), line)  # the pointer row inside its body
+        self.assertTrue(line.startswith("display-popup -c '/dev/pts/3' -x M -y '#{popup_mouse_y}' -w "), line)  # above the creature
         self.assertIn("-b rounded", line)
         runner_path = re.search(r"cloud\.[A-Za-z0-9]+\.sh", line)
         self.assertTrue(runner_path, line)
@@ -1677,7 +1680,7 @@ class TestHandlerCard(TestHandlerAgent):
         lines = text.rstrip("\n").split("\n")
         self.assertTrue(lines[0].startswith("agent · working for "), lines)
         self.assertEqual(lines[1], "context 32% · limit 19% · $160.70 · 7h50m")
-        self.assertEqual(lines[2], "m menu · c card · any key closes")
+        self.assertEqual(lines[2], "m menu · c card · click or key closes")
         self.assertEqual(len(lines), 3)                                  # highlights only
         self.assertIn("-h 5 ", line)
         self.assertIn("printf '\\033[?1000h\\033[?1006h'\nwhile IFS= read -rsn1 k </dev/tty; do", runner)  # a click closes it too
