@@ -140,7 +140,7 @@ class TestContent(unittest.TestCase):
         plain = "\n".join(sl.strip_ansi(r) for r in sl.render(copy.deepcopy(FULL), 220, NOW))
         for expect in ("Fable 5", "●", "✧", "some-long-project-name", "#42✓",
                        "[I]", "◈ my-session", "72%", "144.2K/200K", "63%", "81%",
-                       "· 3d", "+128", "-37", "cache 95%", "T:1h30m", "$3.21",
+                       "· 3d", "+128", "-37", "cache 95%", "2h", "$3.2",
                        "▐█ reviewer"):
             self.assertIn(expect, plain, "missing {!r} in:\n{}".format(expect, plain))
 
@@ -364,7 +364,7 @@ class TestCostCycle(unittest.TestCase):
         a = self.row2(NOW)
         b = self.row2(NOW + sl.CYCLE_S)
         self.assertNotEqual(a, b)
-        shown = {("T:1h30m" in a, "$3.21" in a), ("T:1h30m" in b, "$3.21" in b)}
+        shown = {("2h" in a, "$3.2" in a), ("2h" in b, "$3.2" in b)}
         self.assertEqual(shown, {(True, False), (False, True)})
 
     def test_flip_moves_nothing(self):
@@ -384,22 +384,22 @@ class TestCostCycle(unittest.TestCase):
     def test_padded_to_wider_label(self):
         a = self.row2(NOW)
         b = self.row2(NOW + sl.CYCLE_S)
-        short, long_ = sorted((a, b), key=lambda r: ("$3.21" in r))
-        # "$3.21" (5) is padded to "T:1h30m" (7): two spaces follow it
-        self.assertIn("$3.21   //", long_ if "$3.21" in long_ else short)
+        short, long_ = sorted((a, b), key=lambda r: ("$3.2" in r))
+        # "2h" (2) is padded to "$3.2" (4): two spaces follow it
+        self.assertIn("2h   //", short if "2h" in short else long_)
 
     def test_narrow_shows_cost_alone(self):
         row = self.row2(NOW, cols=44)   # the ladder has dropped the duration here
-        self.assertIn("$3.21", row)
-        self.assertNotIn("T:", row)
-        self.assertNotIn("$3.21  ", row)
+        self.assertIn("$3.2", row)
+        self.assertNotIn("2h", row)
+        self.assertNotIn("$3.2  ", row)
 
     def test_both_mode_keeps_two_segments(self):
         os.environ["RETRO_HUD_COST_MODE"] = "both"
         row = self.row2(NOW)
-        self.assertIn("T:1h30m", row)
-        self.assertIn("$3.21", row)
-        self.assertLess(row.index("T:1h30m"), row.index("$3.21"))
+        self.assertIn("2h", row)
+        self.assertIn("$3.2", row)
+        self.assertLess(row.index("2h"), row.index("$3.2"))
 
     def test_cost_link_covers_the_field(self):
         os.environ["RETRO_HUD_ACTIONS"] = "1"
@@ -450,10 +450,10 @@ class TestHomeLink(unittest.TestCase):
     # sha256 of "\n".join(render(FULL, cols, NOW)) as rendered by v2.6.0,
     # before RETRO_HUD_HOME_URL existed: unset must stay byte-identical.
     GOLDEN = {
-        60: "cc59a504bdf88a19651e861bf4c70a2c8998ce4c4283268444291d3bb3dcec64",
-        100: "9e54e4c8ea31cdd2be077a306755e33fff053e9d5183b59a1ed101a46bc12682",
-        160: "4b35578c5f291ba954f0aa8c233feb9cd322c7f8074649f30ae8314612e37573",
-        220: "03b04902deb4e7809295836b812780ce0b7b51a458627e2af4edb088b2f00622",
+        60: "65f3666f428a782a2ab76a050b34db04917e99bd61de7a54763a23f731f500ea",
+        100: "d3acb7d6d65223b2a764b81d37fed41d4815718edff60327f3e612ebe9cc758c",
+        160: "18fbeeb20e697531f44114984381523b65b773a62b4b366e7c5cebde2506563e",
+        220: "a72a0c0fb3fc0836a9181bc99a4c536b75a93d1be564ca58416716a328c4e11f",
     }
 
     def setUp(self):
@@ -511,20 +511,20 @@ class TestClickActionLinks(unittest.TestCase):
     # With actions off the output must stay byte-identical, even in tmux.
     GOLDEN = {
         "FULL": {
-            60: "cc59a504bdf88a19651e861bf4c70a2c8998ce4c4283268444291d3bb3dcec64",
-            100: "9e54e4c8ea31cdd2be077a306755e33fff053e9d5183b59a1ed101a46bc12682",
-            160: "4b35578c5f291ba954f0aa8c233feb9cd322c7f8074649f30ae8314612e37573",
-            220: "03b04902deb4e7809295836b812780ce0b7b51a458627e2af4edb088b2f00622"},
+            60: "65f3666f428a782a2ab76a050b34db04917e99bd61de7a54763a23f731f500ea",
+            100: "d3acb7d6d65223b2a764b81d37fed41d4815718edff60327f3e612ebe9cc758c",
+            160: "18fbeeb20e697531f44114984381523b65b773a62b4b366e7c5cebde2506563e",
+            220: "a72a0c0fb3fc0836a9181bc99a4c536b75a93d1be564ca58416716a328c4e11f"},
         "MINIMAL": {
-            60: "5671daa0bac893ad6805e3705e3025795fe35ef547c2c52b1a84a6bf8a5726ee",
-            100: "3818f0574300890d7bc522751e1a0a0089b4b5e77980d22a76efd5bb65cca6e2",
-            160: "816b8ff61d4286f678970bae77a9893b1b0e334dd1f9e9e69ab7e63aafbdcc8e",
-            220: "ccb305097189923e0078fcba5918b534e5846d89295a937e5b04420a604ab989"},
+            60: "2f1c609b861da918eb94de12c4d191e24f49ebcb96d9cb3378b9e90d27cc21ba",
+            100: "5f69e6d3fd142bff9e82509678975d31d04309b529872f0d73769ee321f8ab71",
+            160: "a2f4d74097b5f747bf76466ad2c1c2e1c2a1fad2acd72d12834eb462d72b9eb1",
+            220: "eedd80df69f13df613892a0252c9e1ec48bed3e77024f020277fce6f81a1552e"},
         "OVERLOAD": {
-            60: "5ed1fb4dc5b73ab081fd1b68aa5e57634a0610edbb93c9527664625c23e10ddf",
-            100: "83362b5e8c99343deb6decb4ba56a2e49c79250f45cbb1a77aa3a3a4b56a3ca4",
-            160: "98be41c46e09ad289439cbe37776d718a9fb93e620d70ee6d4e24d5f4759ba44",
-            220: "e8845c761adb2e5500a400a976366ef11baaae59ec0b3e2d7751e0c1051c8b75"},
+            60: "b3f9c4feba599b52d802c000d49679dbc8046bd18bc341670b6853ae20c31068",
+            100: "656d2d1c0d4b672db0ad0a20508b54e16d992f0d67d570a8c9a49b62c56baf9c",
+            160: "5976a63b1722754fa944eb0409d6e61a874f50cf5a8c4aeacf6cccd15c702250",
+            220: "7abe75b553a73407976fe3fd6ca3c1a3143e5cc3289a5034d602b4b274bb9e15"},
     }
     KEYS = ("RETRO_HUD_ACTIONS", "TMUX_PANE", "TMUX", "RETRO_HUD_HOME_URL")
     Q = "pane=%257&sock=/tmp/tmux-1000/default"
@@ -583,7 +583,7 @@ class TestClickActionLinks(unittest.TestCase):
         (row, url, text), = found["ctx"]
         self.assertEqual((row, url), (1, "retro-hud://ctx?" + self.Q))
         self.assertTrue(text.endswith("72%"), text)
-        self.assertEqual(found["cost"], [(1, "retro-hud://cost?" + self.Q, "$3.21")])
+        self.assertEqual(found["cost"], [(1, "retro-hud://cost?" + self.Q, "$3.2")])
         self.assertEqual(found["diff"], [(1, "retro-hud://diff?" + self.Q, "+128/-37")])
         (row, url, text), = found["usage"]
         self.assertEqual((row, url), (1, "retro-hud://usage?" + self.Q))
@@ -4867,6 +4867,14 @@ class TestCreatureCLI(unittest.TestCase):
 
 
 class TestHelpers(unittest.TestCase):
+    def test_short_duration_and_cost(self):
+        d = sl.fmt_short_dur
+        self.assertEqual([d(0), d(4 * 60000), d(47 * 60000), d(58 * 60000)], ["0m", "4m", "45m", "1h"])
+        self.assertEqual([d(90 * 60000), d(89 * 60000), d(25 * 3600000 + 16 * 60000)], ["2h", "1h", "25h"])
+        c = sl.fmt_short_cost
+        self.assertEqual([c(0), c(0.37), c(3.21), c(5.43), c(20.8), c(99.6), c(208), c(995), c(1234)],
+                         ["$0.0", "$0.4", "$3.2", "$5.4", "$21", "$100", "$210", "$1000", "$1.2k"])
+
     def test_trunc_by_visible_width(self):
         self.assertEqual(sl.trunc("abcdefgh", 5), "abc..")
         self.assertEqual(sl.trunc("abc", 5), "abc")

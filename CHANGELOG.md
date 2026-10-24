@@ -27,6 +27,10 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   asleep. Amber and red still take over when a gauge is hot.
 
 ### Changed
+- **Duration ↔ cost field rounds hard** so its width stays put as it
+  flips: whole hours from 1h (`2h`), minutes to the nearest five below,
+  two significant figures of cost (`$3.2`, `$21`, `$210`, `$1.2k`); the
+  `T:` prefix is gone, the pink colour marks the duration.
 - `robot` no longer means the `bot` family: a session whose state file or
   `RETRO_HUD_SPRITE` says `robot` gets the new robot. `cat` and `ghost`
   still map to `beast` and `blob`.

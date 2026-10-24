@@ -239,6 +239,29 @@ def vislen(s):
     return vwidth(strip_ansi(s))
 
 
+def fmt_short_dur(ms):
+    """Session duration, rounded hard (CS: the duration ↔ cost field must
+    not change width as it flips): whole hours from 1h (1h30m → 2h), else
+    minutes to the nearest 5 (47m → 45m), else "0m"."""
+    mins = int(ms) // 60000
+    m5 = int(5 * round(mins / 5.0)) if mins >= 5 else mins
+    if m5 >= 60:
+        return "{}h".format(max(1, int(round(mins / 60.0))))
+    return "{}m".format(m5)
+
+
+def fmt_short_cost(cost):
+    """Cost to two significant figures: $0.4, $5.4, $21, $210, $1.2k."""
+    c = float(cost)
+    if c < 10:
+        return "${:.1f}".format(c)
+    if c < 100:
+        return "${:.0f}".format(c)
+    if c < 1000:
+        return "${:.0f}".format(10 * round(c / 10.0))
+    return "${:.1f}k".format(c / 1000.0)
+
+
 def trunc(s, maxw):
     """Truncate to maxw visible columns, '..' suffix when cut."""
     if vwidth(s) <= maxw:
@@ -2117,7 +2140,7 @@ def _seat(row2):
     None."""
     texts = [t for _, t in split_cells(row2)[0]]
     plain = "".join(t or "\0" for t in texts)
-    m = re.search(r"\$\d[\d.]*|T:\d\S*", plain)
+    m = re.search(r"\$\d[\d.]*|\b\d+[hm]\b", plain)
     return (m.start(), m.end() - m.start()) if m else None
 
 
@@ -2497,14 +2520,8 @@ def render(data, cols, now):
     ctx_len = clamp(cols // 20, 4, 10)
     rl_len = clamp(cols // 40, 3, 6)
 
-    # ── duration ──
-    dur_min = dur_ms // 60000
-    if dur_min >= 60:
-        dur_str = "{}h{:02d}m".format(dur_min // 60, dur_min % 60)
-    elif dur_min > 0:
-        dur_str = "{}m".format(dur_min)
-    else:
-        dur_str = "{}s".format(dur_ms % 60000 // 1000)
+    # ── duration (rounded hard: the field must not jitter) ──
+    dur_str = fmt_short_dur(dur_ms)
 
     # ═══ ROW 1 ═══
     def model_seg(name):
@@ -2648,7 +2665,7 @@ def render(data, cols, now):
     cost_mode = os.environ.get("RETRO_HUD_COST_MODE", "cycle")
     if cost_mode not in ("cycle", "both"):
         cost_mode = "cycle"
-    cost_str = "${:.2f}".format(cost) if cost < 100 else "${:.0f}".format(cost)
+    cost_str = fmt_short_cost(cost)
 
     def cost_seg(cycle):
         """Cost alone, or (cycle mode) duration ↔ cost in ONE field: both labels
@@ -2656,7 +2673,7 @@ def render(data, cols, now):
         narrow-terminal ladder passes cycle=False and shows the cost alone."""
         if not cycle:
             return NEON_YEL + action("cost", cost_str) + R
-        dur_lbl = "T:" + dur_str
+        dur_lbl = dur_str
         width = max(vwidth(dur_lbl), vwidth(cost_str))
         if (now // CYCLE_S) % 2 == 1:
             return NEON_PINK + action("cost", dur_lbl.ljust(width)) + R
