@@ -55,7 +55,10 @@ Env toggles:
     RETRO_HUD_CREATURE_SEED=<s>  pin the creature's look (integer or any
                                  string; default: the session id)
     RETRO_HUD_CREATURE_COLOR=<c> pin its colour: pink, green, purple, cyan,
-                                 orange or a 256-colour index
+                                 orange, a 256-colour index, or mood (the
+                                 session's state colours it: cyan working,
+                                 green your turn, yellow needs you, pink
+                                 error, dim idle and asleep; its own when calm)
     RETRO_HUD_SPRITE=alien       creature family: blob, beast, alien, bot (the
                                  2.x names cat, robot, ghost map to beast,
                                  bot, blob); with the creature off, the
@@ -1065,6 +1068,9 @@ FAMILIES = ("blob", "beast", "alien", "bot", "robot")
 _FAMILY_ALIAS = {"cat": "beast", "ghost": "blob"}  # robot is its own family since 3.1
 CREATURE_COLORS = {"pink": 198, "green": 46, "purple": 135, "cyan": 45, "orange": 202}
 CREATURE_PALETTE = (198, 46, 135, 45)  # seeded body colours; orange is for warnings
+# RETRO_HUD_CREATURE_COLOR=mood: the body colour by mood (calm: the seed's)
+MOOD_256 = {"working": 51, "yours": 46, "needs": 226, "error": 198, "idle": 65, "asleep": 240,
+            "agitated": 214, "red": 196}
 CREATURE_ATTEMPTS = 16
 _M32 = 0xFFFFFFFF
 
@@ -1111,8 +1117,10 @@ def creature_seed(state=None, env="", sid=""):
 
 def pinned_color(pin):
     """A RETRO_HUD_CREATURE_COLOR value (a name or 0–255) as a 256-colour
-    index, or None when it names no colour."""
+    index, "mood" for the mood colours, or None when it names no colour."""
     pin = str(pin or "").strip().lower()
+    if pin == "mood":
+        return "mood"
     if pin in CREATURE_COLORS:
         return CREATURE_COLORS[pin]
     if pin.isdigit() and int(pin) <= 255:
@@ -1124,7 +1132,7 @@ def creature_color(seed, pin=""):
     """256-colour index of the body: RETRO_HUD_CREATURE_COLOR (a name or
     0–255) pins it, else one of CREATURE_PALETTE chosen by the seed."""
     pinned = pinned_color(pin)
-    if pinned is not None:
+    if pinned is not None and pinned != "mood":
         return pinned
     return CREATURE_PALETTE[int(_mulberry32(seed ^ 0x5EED)() * len(CREATURE_PALETTE))]
 
@@ -1478,10 +1486,15 @@ def _scatter(cv, seed, tick, k):
 
 
 def _colour(seed, mood, color):
+    """The body's 256-colour index: amber and red for the gauge zones,
+    else `color` (a pinned index; "mood" takes MOOD_256, the seed's colour
+    when calm), else the seed's."""
     if mood == "agitated":
         return AMBER
     if mood == "red":
         return RED_256
+    if color == "mood":
+        color = MOOD_256.get(mood)
     return creature_color(seed) if color is None else color
 
 

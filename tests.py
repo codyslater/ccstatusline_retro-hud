@@ -3077,6 +3077,39 @@ def _filled(cv):
     return {(r, c) for r in range(4) for c in range(13) if cv[r][c]}
 
 
+class TestMoodColour(unittest.TestCase):
+    """RETRO_HUD_CREATURE_COLOR=mood: the body takes the mood's colour, the
+    seeded one when calm; the gauge zones still win."""
+    WANT = {"working": 51, "yours": 46, "needs": 226, "error": 198, "idle": 65, "asleep": 240,
+            "agitated": 214, "red": 196}
+
+    def test_mood_is_a_pin_value(self):
+        self.assertEqual(sl.pinned_color("mood"), "mood")
+        self.assertEqual(sl.pinned_color(" Mood "), "mood")
+        self.assertEqual(sl.creature_color(3, "mood"), sl.creature_color(3))  # the seed's, when asked plainly
+        self.assertEqual(sl.MOOD_256, self.WANT)
+
+    def test_colour_per_mood(self):
+        for seed in (0, 7, 42):
+            self.assertEqual(sl._colour(seed, "calm", "mood"), sl.creature_color(seed))
+            for mood, c in self.WANT.items():
+                self.assertEqual(sl._colour(seed, mood, "mood"), c, mood)
+            self.assertEqual(sl._colour(seed, "working", None), sl.creature_color(seed))
+            self.assertEqual(sl._colour(seed, "working", 135), 135)
+
+    def test_every_pose_takes_it(self):
+        for mood, c in list(self.WANT.items()) + [("calm", None)]:
+            want = sl.creature_color(5) if c is None else c
+            for fam in sl.FAMILIES:
+                self.assertEqual(sl.tiny_pose(5, mood, None, NOW, 60, fam, color="mood")["body"], want,
+                                 (mood, fam))
+                self.assertEqual(sl.big_pose(5, mood, None, NOW, 60, fam, color="mood")["body"], want,
+                                 (mood, fam))
+        # the tiny alien is green on its own, cyan while working with the mood colour
+        self.assertEqual(sl.tiny_pose(5, "working", None, NOW, 60, "alien")["body"], sl.TINY_ALIEN_COLOR)
+        self.assertEqual(sl.tiny_pose(5, "working", None, NOW, 60, "alien", color="mood")["body"], 51)
+
+
 class QuietBody:
     """Mood poses in isolation: no blink, hop or breath this tick (the
     alive flags have their own tests)."""
@@ -3593,6 +3626,16 @@ class TestCreatureHud(CreatureCase):
         self.tx(asst(NOW - 2, "tool_use"))
         os.environ["RETRO_HUD_CREATURE_COLOR"] = "pink"
         self.assertTrue(_has_color(self.rows(NOW + 100)[0], 198))
+
+    def test_mood_colour_follows_the_session(self):
+        os.environ["RETRO_HUD_CREATURE_COLOR"] = "mood"
+        os.environ["RETRO_HUD_CREATURE_SEED"] = "3"
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))      # working
+        self.assertTrue(_has_color(self.rows(NOW)[0], 51))
+        self.tx(user(NOW - 50), asst(NOW - 30, "end_turn"))     # yours
+        self.assertTrue(_has_color(self.rows(NOW)[0], 46))
+        os.environ["RETRO_HUD_CREATURE_COLOR"] = "pink"
+        self.assertTrue(_has_color(self.rows(NOW)[0], 198))
 
     def test_family_names_in_the_state_file_are_ignored_when_off(self):
         self.tx(asst(NOW - 2, "tool_use"))
