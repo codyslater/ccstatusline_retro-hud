@@ -1686,6 +1686,7 @@ class TestHandlerCard(TestHandlerAgent):
         self.assertIn("printf '\\033[?1000h\\033[?1006h'\nwhile IFS= read -rsn1 k </dev/tty; do", runner)  # a click closes it too
         self.assertIn("case \"$s\" in '[<'*m) continue ;; esac", runner)                                    # a release does not
         self.assertIn("run-shell -b -d 0.3", runner)
+        self.assertNotIn("exec tmux", runner)        # an exec would skip the marker's EXIT trap
         self.assertIn("retro-hud://agent?pane=%257", runner)
         self.assertIn("retro-hud://card?pane=%257", runner)
         self.assertIn("rm -f", runner)

@@ -9,6 +9,8 @@
 
 ![retro-hud running live in Claude Code](retro-hud-live.png)
 
+![the creature at work: walking while the agent works, bouncing with a ? when it needs you, waving when the turn is yours, dimming when idle](retro-hud-demo.gif)
+
 Two rows in a closed $\color{#00ff00}{\textsf{neon green}}$ wireframe with
 $\color{#00ffff}{\textsf{cyan}}$ `//` separators and a [pixel creature](#agent-presence)
 standing on top, showing every number Claude

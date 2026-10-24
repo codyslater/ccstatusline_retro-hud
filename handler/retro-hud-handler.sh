@@ -727,9 +727,10 @@ show_cloud() {  # pane; after agent_target
       printf 'printf %%s "$(cat %s)"\n' "'$file'"; printf '%s' "$POPUP_READ"
       printf 'rm -f %s %s\n' "'$file'" "'$runner'"; } >"$runner"
     # the popup must be gone before a menu or another popup may open: a short delay
-    printf '[ "$k" = m ] && exec tmux run-shell -b -d 0.3 %s\n' \
+    # no exec here: the EXIT trap (the popup marker) must still run
+    printf '[ "$k" = m ] && tmux run-shell -b -d 0.3 %s\n' \
         "$(tmq "'$SELF' '${url/card?/agent?}'")" >>"$runner"
-    printf '[ "$k" = c ] && exec tmux run-shell -b -d 0.3 %s\nexit 0\n' "$(tmq "'$SELF' '$url'")" >>"$runner"
+    printf '[ "$k" = c ] && tmux run-shell -b -d 0.3 %s\nexit 0\n' "$(tmq "'$SELF' '$url'")" >>"$runner"
     w=$(( $(vis_width <"$file") + 4 ))
     h=$(( $(wc -l <"$file") + 2 ))
     read -r cols rows < <(tm display -p -c "$CLIENT" '#{client_width} #{client_height}' 2>/dev/null) || cols="" rows=""
