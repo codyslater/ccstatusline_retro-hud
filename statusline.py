@@ -2695,16 +2695,16 @@ def render(data, cols, now):
     cost_str = fmt_short_cost(cost)
 
     def cost_seg(cycle):
-        """Cost alone, or (cycle mode) duration ↔ cost in ONE field: both labels
-        are padded to the wider one, so the flip never moves a neighbour. The
-        narrow-terminal ladder passes cycle=False and shows the cost alone."""
+        """Cost alone, or (cycle mode) duration ↔ cost in ONE field. Both are
+        rounded hard (fmt_short_dur / fmt_short_cost), so their widths differ
+        by a cell or two at most; no padding (CS 20261023: "consistent space
+        instead of frozen totally padded"). The narrow-terminal ladder passes
+        cycle=False and shows the cost alone."""
         if not cycle:
             return NEON_YEL + action("cost", cost_str) + R
-        dur_lbl = dur_str
-        width = max(vwidth(dur_lbl), vwidth(cost_str))
         if (now // CYCLE_S) % 2 == 1:
-            return NEON_PINK + action("cost", dur_lbl.ljust(width)) + R
-        return NEON_YEL + action("cost", cost_str.ljust(width)) + R
+            return NEON_PINK + action("cost", dur_str) + R
+        return NEON_YEL + action("cost", cost_str) + R
 
     show_lines = lines_add > 0 or lines_del > 0
     show_dur = True

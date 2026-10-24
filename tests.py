@@ -375,24 +375,27 @@ class TestCostCycle(unittest.TestCase):
         a = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW)[1])
         b = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW + sl.CYCLE_S)[1])
         self.assertNotEqual(a, b)
-        self.assertEqual(len(a), len(b))
-        # every separator sits in the same column on both phases
-        self.assertEqual([m.start() for m in re.finditer("//", a)],
-                         [m.start() for m in re.finditer("//", b)])
+        self.assertEqual(len(a), len(b))               # the frame absorbs the difference
+        # no padding (CS): separators after the field may shift by the two labels'
+        # width difference ("2h" vs "$3.2": 2 cells), never more; those before it never
+        sa = [m.start() for m in re.finditer("//", a)]
+        sb = [m.start() for m in re.finditer("//", b)]
+        self.assertEqual(len(sa), len(sb))
+        self.assertTrue(all(abs(x - y) <= 2 for x, y in zip(sa, sb)), (sa, sb))
+        self.assertEqual(sa[:3], sb[:3])
         self.assertEqual(a.index("┘"), b.index("┘"))
 
-    def test_padded_to_wider_label(self):
+    def test_not_padded_the_separator_keeps_one_space(self):
         a = self.row2(NOW)
         b = self.row2(NOW + sl.CYCLE_S)
-        short, long_ = sorted((a, b), key=lambda r: ("$3.2" in r))
-        # "2h" (2) is padded to "$3.2" (4): two spaces follow it
-        self.assertIn("2h   //", short if "2h" in short else long_)
+        short = a if "2h" in a else b
+        self.assertIn("2h //", short)           # no padding: one space, then the separator
+        self.assertNotIn("2h  ", short)
 
     def test_narrow_shows_cost_alone(self):
         row = self.row2(NOW, cols=44)   # the ladder has dropped the duration here
         self.assertIn("$3.2", row)
         self.assertNotIn("2h", row)
-        self.assertNotIn("$3.2  ", row)
 
     def test_both_mode_keeps_two_segments(self):
         os.environ["RETRO_HUD_COST_MODE"] = "both"

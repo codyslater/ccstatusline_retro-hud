@@ -37,7 +37,8 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 - **Duration ↔ cost field rounds hard** so its width stays put as it
   flips: whole hours from 1h (`2h`), minutes to the nearest five below,
   two significant figures of cost (`$3.2`, `$21`, `$210`, `$1.2k`); the
-  `T:` prefix is gone, the pink colour marks the duration.
+  `T:` prefix is gone, the pink colour marks the duration. The field is no
+  longer padded to its wider label: one space before `//` either way.
 - `robot` no longer means the `bot` family: a session whose state file or
   `RETRO_HUD_SPRITE` says `robot` gets the new robot. `cat` and `ghost`
   still map to `beast` and `blob`.
