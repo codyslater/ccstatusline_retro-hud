@@ -908,7 +908,15 @@ class TestHandlerActions(ShellHarness):
         self.run_handler(self.url("diff"), FAKE_TMUX_PANE_PATH=self.tmp)
         self.assertEqual(self.tmux_calls("display-popup"), [])
         msgs = self.tmux_calls("display-message")
-        self.assertTrue(any("no git repository" in " ".join(m) for m in msgs), msgs)
+        self.assertTrue(any("no git repository" in " ".join(m) and "-d" in m for m in msgs), msgs)
+
+    def test_diff_dir_override_from_a_local_extension(self):
+        # RETRO_HUD_DIFF_DIR (an absolute existing directory) wins over the pane's path
+        argv = self.diff_popup(self.url("diff"), FAKE_TMUX_PANE_PATH=self.tmp, RETRO_HUD_DIFF_DIR=self.work)
+        self.assertEqual(argv[argv.index("-d") + 1], self.work)
+        for bad in ("relative", "/no/such/dir", self.work + "\n/tmp"):
+            self.run_handler(self.url("diff"), FAKE_TMUX_PANE_PATH=self.tmp, RETRO_HUD_DIFF_DIR=bad)
+        self.assertEqual(len(self.tmux_calls("display-popup")), 1)
 
     def test_send_verifies_the_clicked_pane(self):
         self.run_handler(self.url("cost", pane="%42"), FAKE_TMUX_ACTIVE_PANE="%42")
@@ -1583,6 +1591,7 @@ class TestHandlerCard(TestHandlerAgent):
         self.assertEqual(opts["-h"], str(len(lines) + 2))
         self.assertLessEqual(int(opts["-w"]), 78)
         self.assertIn("read -rsn1 k", runner)
+        self.assertIn("printf '\\033[?1000h\\033[?1006h'", runner)
         self.assertIn('[ "$k" = m ] && exit 10', runner)
         self.assertEqual(self.tmux_calls("display-menu"), [])
 
@@ -1656,7 +1665,7 @@ class TestHandlerCard(TestHandlerAgent):
         self.assertEqual(self.tmux_calls("display-popup"), [])          # nothing runs here
         with open(menu_file) as f:
             line = f.read()
-        self.assertTrue(line.startswith("display-popup -c '/dev/pts/3' -x M -y '#{popup_mouse_y}' -w "), line)
+        self.assertTrue(line.startswith("display-popup -c '/dev/pts/3' -x M -y '#{e|+:#{popup_mouse_y},2}' -w "), line)  # the pointer row inside its body
         self.assertIn("-b rounded", line)
         runner_path = re.search(r"cloud\.[A-Za-z0-9]+\.sh", line)
         self.assertTrue(runner_path, line)
@@ -1671,6 +1680,8 @@ class TestHandlerCard(TestHandlerAgent):
         self.assertEqual(lines[2], "m menu · c card · any key closes")
         self.assertEqual(len(lines), 3)                                  # highlights only
         self.assertIn("-h 5 ", line)
+        self.assertIn("printf '\\033[?1000h\\033[?1006h'\nwhile IFS= read -rsn1 k </dev/tty; do", runner)  # a click closes it too
+        self.assertIn("case \"$s\" in '[<'*m) continue ;; esac", runner)                                    # a release does not
         self.assertIn("run-shell -b -d 0.3", runner)
         self.assertIn("retro-hud://agent?pane=%257", runner)
         self.assertIn("retro-hud://card?pane=%257", runner)

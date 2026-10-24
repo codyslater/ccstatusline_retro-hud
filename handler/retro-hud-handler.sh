@@ -109,6 +109,24 @@ if [ -n "$BOUND_CLIENT" ]; then
         rm -f "$POPUP_MARK"
     fi
 fi
+# What a popup's runner does after printing: wait for one key — or one click. With
+# mouse reporting on, a click inside the popup arrives as an SGR sequence: a PRESS
+# closes it like a key, a RELEASE (…m) is ignored, so the opening click's own release
+# never closes it however long the button is held (CS 20261023: "can't close status
+# message with left click again"). tmux hands a click
+# outside a popup to nobody, so the popup is centred on the pointer: the second click
+# on the same spot lands inside it.
+POPUP_READ="printf '\\033[?1000h\\033[?1006h'
+while IFS= read -rsn1 k </dev/tty; do
+  if [ \"\$k\" = \$'\\e' ]; then
+    s=''; while IFS= read -rsn1 -t 0.05 c </dev/tty; do s+=\"\$c\"; case \"\$c\" in M|m) break ;; esac; done
+    case \"\$s\" in '[<'*m) continue ;; esac
+    k=''
+  fi
+  break
+done
+printf '\\033[?1006l\\033[?1000l'
+"
 popup_guard() {  # the lines a popup's runner starts with: keep the marker while it runs
     [ -n "$POPUP_MARK" ] || return 0
     printf 'touch %s\ntrap %s EXIT\n' "$(tmq "$POPUP_MARK")" "$(tmq "rm -f '$POPUP_MARK'")"
@@ -661,7 +679,8 @@ show_card() {  # pane; after agent_target
     # printed without its final newline, so the cursor stays on the last line and the popup,
     # sized to the text, does not scroll its first line away ($(…) strips it; portable)
     { printf '#!/bin/bash\n'; popup_guard
-      printf 'printf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\n[ "$k" = m ] && exit 10\nexit 0\n' "'$file'"; } >"$runner"
+      printf 'printf %%s "$(cat %s)"\n' "'$file'"; printf '%s' "$POPUP_READ"
+      printf '[ "$k" = m ] && exit 10\nexit 0\n'; } >"$runner"
     w=$(( $(vis_width <"$file") + 4 ))
     h=$(( $(wc -l <"$file") + 2 ))
     read -r cols rows < <(tm display -p -c "$CLIENT" '#{client_width} #{client_height}' 2>/dev/null) || cols="" rows=""
@@ -706,7 +725,8 @@ show_cloud() {  # pane; after agent_target
     } >"$file"
     url="retro-hud://card?pane=%25${pane#%}${SOCK:+&sock=$SOCK}"
     { printf '#!/bin/bash\n'; popup_guard
-      printf 'printf %%s "$(cat %s)"\nread -rsn1 k </dev/tty\nrm -f %s %s\n' "'$file'" "'$file'" "'$runner'"; } >"$runner"
+      printf 'printf %%s "$(cat %s)"\n' "'$file'"; printf '%s' "$POPUP_READ"
+      printf 'rm -f %s %s\n' "'$file'" "'$runner'"; } >"$runner"
     # the popup must be gone before a menu or another popup may open: a short delay
     printf '[ "$k" = m ] && exec tmux run-shell -b -d 0.3 %s\n' \
         "$(tmq "'$SELF' '${url/card?/agent?}'")" >>"$runner"
@@ -718,7 +738,7 @@ show_cloud() {  # pane; after agent_target
     [[ ${rows:-} =~ ^[0-9]+$ ]] || rows=24
     [ "$w" -le $((cols - 2)) ] || w=$((cols - 2))
     [ "$h" -le $((rows - 2)) ] || h=$((rows - 2))
-    printf "display-popup -c %s -x M -y '#{popup_mouse_y}' -w %s -h %s -b rounded -S fg=colour51 -T '' -E %s\n" \
+    printf "display-popup -c %s -x M -y '#{e|+:#{popup_mouse_y},2}' -w %s -h %s -b rounded -S fg=colour51 -T '' -E %s\n" \
         "$(tmq "$CLIENT")" "$w" "$h" "$(tmq "bash '$runner'")" >"$MENU_FILE.tmp" \
         && mv -f "$MENU_FILE.tmp" "$MENU_FILE" || { rm -f "$MENU_FILE.tmp" "$file" "$runner"; log "cloud: menu file write failed"; }
     log "cloud for $pane written to $MENU_FILE"
@@ -766,15 +786,21 @@ case $ACTION in
             exit 0
         fi
         dir=$(tm display -p -t "$PANE" '#{pane_current_path}' 2>/dev/null) || dir=""
+        # a local extension may point the diff at another tree (a session whose work lives
+        # elsewhere); it must still be an absolute, existing directory
+        if [[ ${RETRO_HUD_DIFF_DIR:-} == /* && ${RETRO_HUD_DIFF_DIR:-} != *[[:cntrl:]]* ]] && [ -d "${RETRO_HUD_DIFF_DIR:-}" ]; then
+            dir=$RETRO_HUD_DIFF_DIR
+        fi
         if ! [[ $dir == /* && $dir != *[[:cntrl:]]* ]] || ! [ -d "$dir" ]; then
             log "diff: pane $PANE has no usable directory"
             exit 0
         fi
-        # outside a repository `git diff` prints its --no-index usage page: say so instead
+        # outside a repository `git diff` prints its --no-index usage page: say so instead,
+        # long enough to read (display-message's default 750 ms is easy to miss)
         if ! GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 git -C "$dir" -c core.fsmonitor=false \
                 rev-parse --is-inside-work-tree >/dev/null 2>&1; then
             log "diff: $dir is not in a git repository"
-            tm display-message -c "$CLIENT" "retro-hud: no git repository here" || true
+            tm display-message -c "$CLIENT" -d 4000 "retro-hud: no git repository in ${dir/#$HOME/\~}" || true
             exit 0
         fi
         # A fixed command string: the directory travels as -d, never as
