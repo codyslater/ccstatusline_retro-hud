@@ -681,6 +681,7 @@ if cmd[:1] == ["list-clients"]:
                      "100 /dev/pts/1\n300 /dev/pts/3\n200 /dev/pts/2\n"))
 elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd:
     answer = {"#{pane_current_command}": os.environ.get("FAKE_TMUX_PANE_CMD", "claude"),
+              "#{pane_pid}": os.environ.get("FAKE_TMUX_PANE_PID", "1"),
               "#{pane_current_path}": os.environ.get("FAKE_TMUX_PANE_PATH", ""),
               "#{pane_id}": os.environ.get("FAKE_TMUX_ACTIVE_PANE", "%7")}
     sys.stdout.write(answer.get(cmd[-1], "") + "\n")
@@ -735,6 +736,9 @@ class ShellHarness(unittest.TestCase):
             os.chmod(path, 0o755)
         self.work = os.path.join(self.tmp, "work dir")
         os.makedirs(self.work)
+        if shutil.which("git"):  # the diff action only runs inside a repository
+            subprocess.run(["git", "init", "-q", self.work], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
 
     def tearDown(self):
         import shutil as sh
@@ -863,6 +867,30 @@ class TestHandlerActions(ShellHarness):
         self.assertEqual(self.tmux_calls("send-keys"), [])
         msgs = self.tmux_calls("display-message")
         self.assertTrue(any("no longer running Claude" in " ".join(m) for m in msgs), msgs)
+
+    def test_send_allowed_when_claude_is_the_panes_child(self):
+        # a launcher script in front: pane_current_command is bash, claude its child
+        fake = os.path.join(self.tmp, "claude")
+        shutil.copy("/bin/sleep", fake)
+        os.chmod(fake, 0o755)
+        wrapper = subprocess.Popen(["bash", "-c", '"$0" 30; true', fake])
+        self.addCleanup(wrapper.kill)
+        for _ in range(50):
+            if subprocess.run(["pgrep", "-P", str(wrapper.pid), "-x", "claude"],
+                              stdout=subprocess.PIPE).stdout:
+                break
+            time.sleep(0.05)
+        self.run_handler(self.url("cost"), FAKE_TMUX_PANE_CMD="bash",
+                         FAKE_TMUX_PANE_PID=str(wrapper.pid))
+        self.assertTrue(self.tmux_calls("send-keys"))
+        self.run_handler(self.url("cost"), FAKE_TMUX_PANE_CMD="bash", FAKE_TMUX_PANE_PID="1")
+        self.assertEqual(len(self.tmux_calls("send-keys")), 2)  # unchanged: refused
+
+    def test_diff_outside_a_repository_says_so(self):
+        self.run_handler(self.url("diff"), FAKE_TMUX_PANE_PATH=self.tmp)
+        self.assertEqual(self.tmux_calls("display-popup"), [])
+        msgs = self.tmux_calls("display-message")
+        self.assertTrue(any("no git repository" in " ".join(m) for m in msgs), msgs)
 
     def test_send_verifies_the_clicked_pane(self):
         self.run_handler(self.url("cost", pane="%42"), FAKE_TMUX_ACTIVE_PANE="%42")

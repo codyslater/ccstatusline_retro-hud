@@ -244,13 +244,23 @@ require_active_pane() {
     fi
 }
 
+# Does the pane run Claude? Its foreground command, or (a wrapper script
+# in front: a launcher that execs nothing) a direct child named claude.
+pane_runs_claude() {  # pane -> 0/1; sets CURRENT for the log
+    local pane=$1 pid
+    CURRENT=$(tm display -p -t "$pane" '#{pane_current_command}' 2>/dev/null) || CURRENT=""
+    [ "$CURRENT" = claude ] && return 0
+    pid=$(tm display -p -t "$pane" '#{pane_pid}' 2>/dev/null) || pid=""
+    [[ $pid =~ ^[0-9]+$ ]] && pgrep -P "$pid" -x claude >/dev/null 2>&1
+}
+
 send_slash() {  # pane, command, [arg]
     local pane=$1 text current
     shift
     text=$(slash_text "$@") || reject "send: $(printf '%q ' "$@")"
     require_active_pane "$pane"
-    current=$(tm display -p -t "$pane" '#{pane_current_command}' 2>/dev/null) || current=""
-    if [ "$current" != "claude" ]; then
+    if ! pane_runs_claude "$pane"; then
+        current=$CURRENT
         log "send refused: pane $pane runs '${current:-?}', not claude"
         CLIENT=$(newest_client) || CLIENT=""
         if [ -n "$CLIENT" ]; then
@@ -407,8 +417,8 @@ state_py() {  # op, [arg]; stdout is the result, errors go to the log
 agent_target() {
     local pane=$1 current map sid=""
     require_active_pane "$pane"
-    current=$(tm display -p -t "$pane" '#{pane_current_command}' 2>/dev/null) || current=""
-    if [ "$current" != "claude" ]; then
+    if ! pane_runs_claude "$pane"; then
+        current=$CURRENT
         log "agent refused: pane $pane runs '${current:-?}', not claude"
         tm display-message -c "$CLIENT" "retro-hud: that pane is no longer running Claude" || true
         exit 0
@@ -690,6 +700,13 @@ case $ACTION in
         dir=$(tm display -p -t "$PANE" '#{pane_current_path}' 2>/dev/null) || dir=""
         if ! [[ $dir == /* && $dir != *[[:cntrl:]]* ]] || ! [ -d "$dir" ]; then
             log "diff: pane $PANE has no usable directory"
+            exit 0
+        fi
+        # outside a repository `git diff` prints its --no-index usage page: say so instead
+        if ! GIT_CONFIG_NOSYSTEM=1 GIT_OPTIONAL_LOCKS=0 git -C "$dir" -c core.fsmonitor=false \
+                rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            log "diff: $dir is not in a git repository"
+            tm display-message -c "$CLIENT" "retro-hud: no git repository here" || true
             exit 0
         fi
         # A fixed command string: the directory travels as -d, never as
