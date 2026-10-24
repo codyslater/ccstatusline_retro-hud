@@ -376,7 +376,7 @@ class TestCostCycle(unittest.TestCase):
         b = sl.strip_ansi(sl.render(copy.deepcopy(payload), 220, NOW + sl.CYCLE_S)[1])
         self.assertNotEqual(a, b)
         self.assertEqual(len(a), len(b))               # the frame absorbs the difference
-        # no padding (CS): separators after the field may shift by the two labels'
+        # no padding: separators after the field may shift by the two labels'
         # width difference ("2h" vs "$3.2": 2 cells), never more; those before it never
         sa = [m.start() for m in re.finditer("//", a)]
         sb = [m.start() for m in re.finditer("//", b)]
