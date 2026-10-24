@@ -21,11 +21,10 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   eyes when agitated. `RETRO_HUD_SPRITE=robot`, or **sprite ▸ robot** in
   the agent menu.
 
-- **`RETRO_HUD_CREATURE_COLOR=mood`.** The creature's body colour follows
-  the session: cyan while working, green when the turn is yours, yellow
-  when it needs you, pink on error, dim when idle or asleep, its own
-  seeded colour when calm. Amber and red still take over when a gauge is
-  hot.
+- **`RETRO_HUD_CREATURE_COLOR=mood`.** The creature keeps its seeded
+  colour (sessions still tell apart) and recolours only when something
+  wants you: yellow when it needs you, pink on error, dim when idle or
+  asleep. Amber and red still take over when a gauge is hot.
 
 ### Changed
 - `robot` no longer means the `bot` family: a session whose state file or

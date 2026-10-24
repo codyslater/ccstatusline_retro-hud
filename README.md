@@ -141,11 +141,11 @@ string) to pin one. Its colour comes from the same seed —
 $\color{#ff0087}{\textsf{pink}}$, $\color{#00ff00}{\textsf{green}}$,
 $\color{#af5fff}{\textsf{purple}}$ or $\color{#00d7ff}{\textsf{cyan}}$ —
 and `RETRO_HUD_CREATURE_COLOR` pins it (one of those names, `orange`, or a
-256-colour index). `RETRO_HUD_CREATURE_COLOR=mood` colours it by what the
-session is doing instead: cyan working, green when the turn is yours,
-yellow when it needs you, pink on error, dim when idle or asleep, and its
-own seeded colour when calm. Amber and red still take over when a gauge
-is hot.
+256-colour index). `RETRO_HUD_CREATURE_COLOR=mood` keeps that seeded colour
+while the creature is calm, working or waiting for your turn (its motion
+already shows those), and recolours it only when something wants you:
+yellow when it needs you, pink on error, dim when idle or asleep. Amber
+and red still take over when a gauge is hot.
 
 **Families** set its shape vocabulary, with `RETRO_HUD_SPRITE`:
 
