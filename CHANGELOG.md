@@ -30,12 +30,16 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   only those actions; context, cost and the rate-limit gauges render
   plain. For terminals that underline every hyperlink.
 
-- **`RETRO_HUD_SESSION_NAME`**: `icon` shrinks the `◈ name` segment to the
-  `◈` alone (still the agent menu's link), `0` drops it.
-- **Buttons at the right edge.** The `⌂` home link sits just inside the
-  `┐` and the `◈` (icon mode) inside the `┘`, like window controls,
-  instead of trailing the segments; one cell is reserved on both rows.
-  When that leaves the frame no room they fall back to segments.
+- **`RETRO_HUD_SESSION_NAME=0`** drops the `◈ name` segment; the creature's
+  cloud reaches the agent menu with `m`, so no button is needed.
+- **The home button stands outside the frame, and a return button
+  answers it.** Away from home the `⌂` sits past the `┐` at the far
+  right; on the home session (`RETRO_HUD_AT_HOME=1`) after a `⌂` click a
+  `↩` (`RETRO_HUD_BACK_URL`) sits past the `┘` and goes back to the
+  session you came from, recorded by the handler in `<cache>/home-from`;
+  started on home, neither shows. The column is always reserved, so the
+  end bars line up. The other cell of the column carries the same link.
+  When the frame has no room the `⌂` falls back to a segment.
 - **The creature visits the bottom line twice as often** (the downstairs
   excursion), when row 2 has room.
 - **The card is a speech cloud inside the click binding**: a small rounded

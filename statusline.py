@@ -414,7 +414,7 @@ def action_query():
     return q
 
 
-_ACTION_NAMES = ("model", "effort", "ctx", "cost", "diff", "usage", "agent", "card")
+_ACTION_NAMES = ("model", "effort", "ctx", "cost", "diff", "usage", "agent", "card", "sessions")
 
 
 def actions_on():
@@ -969,6 +969,38 @@ def _write_json(path, obj):
         except OSError:
             pass
         return False
+
+
+SESSIONS_FRESH_S = 15 * 60   # a state file older than this is a session that is gone
+
+
+def other_sessions(sid, now):
+    """(live, needing) counts of the OTHER Claude sessions this machine's
+    presence cache knows (RETRO_HUD_SESSIONS=1): state files written in the
+    last SESSIONS_FRESH_S seconds, this session's own left out. Cache reads
+    only — the handler asks tmux which of them are on screen."""
+    d = cache_dir(create=False)
+    if not d:
+        return 0, 0
+    live = needing = 0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0, 0
+    for name in names:
+        if not name.endswith(".state.json") or name[:-11] == sid:
+            continue
+        path = os.path.join(d, name)
+        try:
+            if now - os.path.getmtime(path) > SESSIONS_FRESH_S:
+                continue
+            st = _read_json(path).get("state")
+        except OSError:
+            continue
+        live += 1
+        if st == "needs":
+            needing += 1
+    return live, needing
 
 
 def card_facts(data):
@@ -2571,23 +2603,33 @@ def render(data, cols, now, _edges=True):
     # RETRO_HUD_SESSION_NAME: 1 (default) the session's name, icon just the ◈
     # (an auto-generated name takes space), 0 nothing; the ◈ stays the
     # agent menu's link either way
+    sid_for_cache = data.get("session_id") if isinstance(data.get("session_id"), str) else ""
     name_mode = os.environ.get("RETRO_HUD_SESSION_NAME", "1").strip().lower()
+    # 1 (default) the ◈ name segment, the agent menu's link; 0 (or the old
+    # "icon") nothing: the creature's cloud reaches that menu too
 
     def session_seg(name):  # the name beside the creature is the agent menu's link
         return DIM + action("agent", "◈ " + name) + R
 
-    # The buttons live at the right edge, just inside the corners, like window
-    # controls: ⌂ (RETRO_HUD_HOME_URL) before ┐ on row 1, and ◈ (the agent menu,
-    # RETRO_HUD_SESSION_NAME=icon) before ┘ on row 2 — the creature's cloud
-    # reaches that menu too, so most people need only the ⌂. With the frame
-    # off they fall back to ordinary segments. One cell is reserved on both
-    # rows when either exists.
-    home_url = "".join(ch for ch in os.environ.get("RETRO_HUD_HOME_URL", "")
-                       if ch.isprintable()).strip()
-    home_seg = NEON_GREEN + link(home_url, "⌂") + R if home_url else ""
-    edge2 = DIM + action("agent", "◈") + R if name_mode == "icon" and session_name else ""
-    edge1 = home_seg
-    edge_w = 1 if frame_on and _edges and (edge1 or edge2) else 0
+    # The home and return buttons stand OUTSIDE the frame at the far right, in
+    # a column the frame always leaves free (so the end bars line up whatever
+    # shows): away from home, ⌂ (RETRO_HUD_HOME_URL) past the ┐ on row 1; on
+    # the home session (RETRO_HUD_AT_HOME=1) after a ⌂ click, ↩
+    # (RETRO_HUD_BACK_URL) past the ┘ on row 2, which goes back to the session
+    # you came from (the handler keeps that in <cache>/home-from); started on
+    # home, neither. The other cell of the column carries the same link, blank,
+    # so each button is two rows tall to the mouse and one glyph to the eye.
+    # With the frame off the button is an ordinary segment.
+    home_url = _clean_url(os.environ.get("RETRO_HUD_HOME_URL", ""))
+    back_url = _clean_url(os.environ.get("RETRO_HUD_BACK_URL", ""))
+    at_home = os.environ.get("RETRO_HUD_AT_HOME", "").strip() == "1"
+    button_url, button = "", ""
+    if home_url and not at_home:
+        button_url, button = home_url, "⌂"
+    elif at_home and back_url and _home_from():
+        button_url, button = back_url, "↩"
+    home_seg = NEON_GREEN + link(button_url, button) + R if button else ""
+    edge_w = 2 if frame_on and _edges and home_url else 0
     full_cols, cols = cols, cols - edge_w
     frame_room = 2 if frame_on else 0   # the frame's lead space and corner: a row must leave them
 
@@ -2595,10 +2637,7 @@ def render(data, cols, now, _edges=True):
     t_model, t_dir, t_branch = model, dir_name, branch
     t_session = trunc(session_name, 28)
     show_pr, show_vim = pr_num > 0, bool(vim_mode)
-    show_session = bool(session_name) and name_mode != "0" and not (name_mode == "icon" and edge_w)
-    if name_mode == "icon" and not edge_w:  # frame off: the ◈ alone as a segment
-        def session_seg(name):
-            return DIM + action("agent", "◈") + R
+    show_session = bool(session_name) and name_mode not in ("0", "icon")
 
     for step in range(9):
         segs = [model_seg(t_model), dir_seg(t_dir)]
@@ -2724,6 +2763,15 @@ def render(data, cols, now, _edges=True):
     show_dur = True
     show_cache = cache_denom > 0 and cols >= 140
     show_agent = bool(agent_name or worktree)
+    # ▣ N: the other Claude sessions the presence cache knows (RETRO_HUD_SESSIONS=1),
+    # ⚑ M of them needing you; the link opens the handler's session list
+    sessions_seg = ""
+    if os.environ.get("RETRO_HUD_SESSIONS", "").strip() == "1":
+        live, needing = other_sessions(sid_for_cache, now)
+        if live:
+            sessions_seg = NEON_CYAN + action("sessions", "▣ {}".format(live)) + R
+            if needing:
+                sessions_seg += " " + NEON_YEL + action("sessions", "⚑ {}".format(needing)) + R
     tok_mode, rl_rich = 2, True
 
     for step in range(8):
@@ -2739,6 +2787,8 @@ def render(data, cols, now, _edges=True):
         segs.append(cost_seg(show_dur and cost_mode == "cycle"))
         if show_agent:
             segs.append(agent_seg())
+        if sessions_seg:
+            segs.append(sessions_seg)
         if not edge_w:
             segs.append(home_seg)
         row2 = _join(NEON_GREEN + "└─" + R, segs)
@@ -2804,23 +2854,37 @@ def render(data, cols, now, _edges=True):
 
     rows = assemble()
     if edge_w and not all(_closed(r, c) for r, c in zip(rows[-2:], "┐┘")):
-        return render(data, full_cols, now, _edges=False)   # no room: buttons as segments
+        return render(data, full_cols, now, _edges=False)   # no room: the ⌂ as a segment
     if edge_w:
-        rows = [_with_edge(r, "┐", edge1) if i == len(rows) - 2 else
-                _with_edge(r, "┘", edge2) if i == len(rows) - 1 else r
+        blank = NEON_GREEN + link(button_url, " ") + R      # the same link, blank
+        top = home_seg if button == "⌂" else blank if button else " "
+        bottom = home_seg if button == "↩" else blank if button else " "
+        rows = [r + " " + top if i == len(rows) - 2 else
+                r + " " + bottom if i == len(rows) - 1 else r
                 for i, r in enumerate(rows)]
     return rows
 
 
+def _clean_url(url):
+    """Control characters stripped, so a URL can't break out of OSC 8."""
+    return "".join(ch for ch in url if ch.isprintable()).strip()
+
+
+def _home_from():
+    """The session a ⌂ click came from, if the handler recorded one in
+    <cache>/home-from (it removes the file when ↩ is used)."""
+    d = cache_dir(create=False)
+    if not d:
+        return ""
+    try:
+        with open(os.path.join(d, "home-from")) as f:
+            return f.read(256).strip()
+    except OSError:
+        return ""
+
+
 def _closed(row, corner):
     return row.endswith(NEON_GREEN + corner + R)
-
-
-def _with_edge(row, corner, edge):
-    """`row` (closed by `corner`) with one cell spliced in before the
-    corner: `edge`, or a rule cell when this row has no button."""
-    tail = NEON_GREEN + corner + R
-    return row[:-len(tail)] + (edge or RULE + "─" + R) + tail
 
 
 # ── entry point ──

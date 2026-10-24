@@ -123,14 +123,14 @@ class TestWidth(unittest.TestCase):
         rows = sl.render(copy.deepcopy(FULL), 160, NOW)
         for row in rows:
             self.assertEqual(sl.vislen(row), 160)
-        self.assertTrue(sl.strip_ansi(rows[0]).endswith("┐"))
-        self.assertTrue(sl.strip_ansi(rows[1]).endswith("┘"))
+        self.assertTrue(_bar(rows[0]).endswith("┐"))
+        self.assertTrue(_bar(rows[1]).endswith("┘"))
 
     def test_frame_disabled_by_env(self):
         os.environ["RETRO_HUD_FRAME"] = "0"
         try:
             rows = sl.render(copy.deepcopy(FULL), 160, NOW)
-            self.assertFalse(sl.strip_ansi(rows[0]).endswith("┐"))
+            self.assertFalse(_bar(rows[0]).endswith("┐"))
         finally:
             del os.environ["RETRO_HUD_FRAME"]
 
@@ -321,7 +321,7 @@ class TestAlien(unittest.TestCase):
         try:
             plain = sl.strip_ansi(sl.render(copy.deepcopy(MINIMAL), 200, NOW)[0])
             self.assertNotIn("o.o", plain)
-            self.assertTrue(plain.endswith("┐"))  # frame still closes
+            self.assertTrue(re.sub(r" [ ⌂↩]$", "", plain).endswith("┐"))  # frame still closes
         finally:
             del os.environ["RETRO_HUD_ALIEN"]
 
@@ -487,9 +487,12 @@ class TestHomeLink(unittest.TestCase):
         rows = sl.render(copy.deepcopy(FULL), 220, NOW)
         self.assertIn("\x1b]8;;" + self.URL + "\a⌂\x1b]8;;\a", rows[0])
         plain = sl.strip_ansi(rows[1])
-        self.assertRegex(plain, r"▐█ reviewer ─+─┘$")           # row 2 keeps a rule cell there
-        self.assertRegex(sl.strip_ansi(rows[0]), r"─⌂┐$")         # at the top-right, inside the corner
+        self.assertRegex(plain, r"▐█ reviewer ─+┘  $")          # row 2: a gap and a blank cell past the corner …
+        self.assertIn("\x1b]8;;" + self.URL + "\a \x1b]8;;\a", rows[1])   # … carrying the same link
+        self.assertRegex(sl.strip_ansi(rows[0]), r"─┐ ⌂$")        # the ⌂ outside the top-right corner
         self.assertNotIn("⌂", plain)
+        self.assertEqual(sl.vislen(rows[0]), 220)
+        self.assertEqual(sl.vislen(rows[1]), 220)
 
     def test_home_glyph_survives_every_width(self):
         os.environ["RETRO_HUD_HOME_URL"] = self.URL
@@ -502,6 +505,43 @@ class TestHomeLink(unittest.TestCase):
                     continue
                 for row in rows:
                     self.assertLessEqual(sl.vislen(row), cols, "cols={}".format(cols))
+
+    def test_home_return_and_neither(self):
+        os.environ["RETRO_HUD_HOME_URL"] = self.URL
+        os.environ["RETRO_HUD_BACK_URL"] = "retro-hud://back"
+        cache = tempfile.mkdtemp(prefix="rhc")
+        saved_cache = os.environ.get("RETRO_HUD_CACHE_DIR")
+        os.environ["RETRO_HUD_CACHE_DIR"] = cache
+        try:
+            # on the home session, nobody came from anywhere: neither button, column reserved
+            os.environ["RETRO_HUD_AT_HOME"] = "1"
+            rows = sl.render(copy.deepcopy(FULL), 220, NOW)
+            self.assertRegex(sl.strip_ansi(rows[0]), r"┐  $")
+            self.assertRegex(sl.strip_ansi(rows[1]), r"┘  $")
+            self.assertNotIn(self.URL, rows[0] + rows[1])
+            self.assertNotIn("retro-hud://back", rows[0] + rows[1])
+            self.assertEqual(sl.vislen(rows[0]), 220)
+            # a ⌂ click recorded where it came from: the return button, past the ┘
+            with open(os.path.join(cache, "home-from"), "w") as f:
+                f.write("review\n")
+            rows = sl.render(copy.deepcopy(FULL), 220, NOW)
+            self.assertRegex(sl.strip_ansi(rows[0]), r"┐  $")
+            self.assertRegex(sl.strip_ansi(rows[1]), r"┘ ↩$")
+            self.assertIn("\x1b]8;;retro-hud://back\a↩\x1b]8;;\a", rows[1])
+            self.assertIn("\x1b]8;;retro-hud://back\a \x1b]8;;\a", rows[0])     # the cell above: same link
+            # away from home: the ⌂, whatever the record says
+            os.environ["RETRO_HUD_AT_HOME"] = "0"
+            rows = sl.render(copy.deepcopy(FULL), 220, NOW)
+            self.assertRegex(sl.strip_ansi(rows[0]), r"┐ ⌂$")
+            self.assertNotIn("↩", sl.strip_ansi(rows[1]))
+        finally:
+            for k in ("RETRO_HUD_BACK_URL", "RETRO_HUD_AT_HOME"):
+                os.environ.pop(k, None)
+            if saved_cache is None:
+                os.environ.pop("RETRO_HUD_CACHE_DIR", None)
+            else:
+                os.environ["RETRO_HUD_CACHE_DIR"] = saved_cache
+            shutil.rmtree(cache, ignore_errors=True)
 
     def test_control_chars_in_url_cannot_escape_the_link(self):
         os.environ["RETRO_HUD_HOME_URL"] = "x://a\x07\x1b[31mb\nc"
@@ -699,6 +739,10 @@ if os.environ.get("FAKE_TMUX_NOSERVER"):
 if cmd[:1] == ["list-clients"]:
     sys.stdout.write(os.environ.get("FAKE_TMUX_CLIENTS",
                      "100 /dev/pts/1\n300 /dev/pts/3\n200 /dev/pts/2\n"))
+elif cmd[:1] == ["list-panes"]:
+    sys.stdout.write(os.environ.get("FAKE_TMUX_PANES", ""))
+elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd and "-c" in cmd and cmd[-1] == "#{session_name}":
+    sys.stdout.write(os.environ.get("FAKE_TMUX_CLIENT_SESSION", "work") + "\n")
 elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd:
     answer = {"#{pane_current_command}": os.environ.get("FAKE_TMUX_PANE_CMD", "claude"),
               "#{pane_pid}": os.environ.get("FAKE_TMUX_PANE_PID", "1"),
@@ -1556,6 +1600,79 @@ class TestHandlerAgent(ShellHarness):
         self.assertEqual(self.get_state(), {"state": "yours"})
 
 
+class TestHandlerSessions(TestHandlerAgent):
+    """retro-hud://sessions: every tmux session with a Claude pane, state words from the
+    cache, needs-you first, click to switch; needs: jump to the first that needs you."""
+    PANES = "work\t%7\tclaude\t1\nreview\t%8\tclaude\t1\nnap\t%9\tclaude\t1\nshell\t%10\tbash\t1\n"
+
+    def seed(self):
+        self.map_pane("7", "aaaaaaaa-0000-4000-8000-000000000007")
+        self.map_pane("8", "bbbbbbbb-0000-4000-8000-000000000008")
+        self.map_pane("9", "cccccccc-0000-4000-8000-000000000009")
+        for sid, st, ago in (("aaaaaaaa-0000-4000-8000-000000000007", "working", 90),
+                             ("bbbbbbbb-0000-4000-8000-000000000008", "needs", 30),
+                             ("cccccccc-0000-4000-8000-000000000009", "idle", 7200)):
+            with open(os.path.join(self.cache, sid + ".state.json"), "w") as f:
+                json.dump({"state": st, "since": time.time() - ago}, f)
+
+    def test_menu_lists_claude_sessions_needs_first_and_switches(self):
+        self.seed()
+        p = self.run_handler(self.url("sessions"), FAKE_TMUX_PANES=self.PANES, FAKE_TMUX_CLIENT_SESSION="work")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        menus = self.tmux_calls("display-menu")
+        self.assertEqual(len(menus), 1, self.log("tmux"))
+        argv = menus[0]
+        self.assertEqual(argv[argv.index("-T") + 1], " sessions (3) ")
+        items = argv[argv.index("-T") + 2:]                       # name / key / command triples
+        self.assertEqual(len(items) % 3, 0, items)
+        names = [items[i] for i in range(0, len(items), 3)]
+        self.assertEqual(names[0], "⇢  first that needs you: review")
+        self.assertTrue(names[1].startswith("review   #[fg=colour226,bold]needs you#[default]"), names)
+        self.assertTrue(names[2].startswith("nap   #[dim]idle#[default] 2h"), names)
+        self.assertTrue(names[3].startswith("-work   #[fg=colour46]working#[default]") and names[3].endswith("· here"), names)
+        self.assertNotIn("shell", " ".join(names))                 # a bash pane is not a session to list
+        cmds = [items[i + 2] for i in range(0, len(items), 3)]
+        self.assertEqual(cmds[1], "switch-client -c '/dev/pts/3' -t '=review'")
+        self.assertEqual(cmds[0], "switch-client -c '/dev/pts/3' -t '=review'")
+        self.assertEqual(cmds[3], "")                              # the current session: disabled
+
+    def test_menu_in_the_binding_goes_to_the_menu_file(self):
+        self.seed()
+        menu_file = os.path.join(self.tmp, "m.tmux")
+        self.run_handler(self.url("sessions"), FAKE_TMUX_PANES=self.PANES, RETRO_HUD_MENU_FILE=menu_file,
+                         RETRO_HUD_CLIENT="/dev/pts/3")
+        with open(menu_file) as f:
+            line = f.read()
+        self.assertTrue(line.startswith("display-menu -O -c '/dev/pts/3' -T ' sessions (3) ' -x M -y '#{popup_mouse_y}' --"), line)
+        self.assertIn("=review", line)
+        self.assertIn("switch-client", line)
+        self.assertEqual(self.tmux_calls("display-menu"), [])
+
+    def test_unmapped_claude_pane_is_unknown_and_an_empty_server_says_so(self):
+        self.run_handler(self.url("sessions"), FAKE_TMUX_PANES="solo\t%7\tclaude\t1\n")
+        argv = self.tmux_calls("display-menu")[0]
+        self.assertIn("solo   #[dim]unknown#[default]", " ".join(argv))
+        self.assertIn("-⇢  nobody needs you", argv)
+        self.run_handler(self.url("sessions"), FAKE_TMUX_PANES="")
+        argv = self.tmux_calls("display-menu")[1]
+        self.assertIn("-no Claude session in tmux", argv)
+
+    def test_needs_jumps_to_the_first_that_needs_you(self):
+        self.seed()
+        self.run_handler("retro-hud://needs", FAKE_TMUX_PANES=self.PANES, FAKE_TMUX_CLIENT_SESSION="work")
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=review"]])
+        self.run_handler("retro-hud://needs", FAKE_TMUX_PANES=self.PANES, FAKE_TMUX_CLIENT_SESSION="review")
+        self.assertEqual(len(self.tmux_calls("switch-client")), 1)   # the needing one is here already
+        self.assertTrue(any("nobody needs you" in " ".join(m) for m in self.tmux_calls("display-message")))
+
+    def test_switch_takes_a_plain_session_name_only(self):
+        self.run_handler("retro-hud://switch?to=review")
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=review"]])
+        for bad in ("a%20b", "x%3By", "%24%28id%29", "..%2Fx", ""):
+            self.run_handler("retro-hud://switch?to=" + bad)
+        self.assertEqual(len(self.tmux_calls("switch-client")), 1)
+
+
 class TestHandlerCard(TestHandlerAgent):
     """The `card` action: the creature's status card, a popup from the
     state file's facts plus one tip; any key closes it, m opens the menu."""
@@ -2303,7 +2420,7 @@ class TestPresenceRender(PresenceCase):
                 self.assertEqual(sl.vislen(on[0]), sl.vislen(off[0]), cols)
                 # the gauge alien's rule holds no spaces: the last one is
                 # where the segments end and the rule begins
-                m = re.match(r"^(.*) [^ ]*┐$", p_off)
+                m = re.match(r"^(.*) [^ ]*┐$", re.sub(r" [ ⌂↩]$", "", p_off))
                 segs = m.group(1) if m else p_off
                 self.assertTrue(p_on.startswith(segs + (" " if m else "")), cols)
                 self.assertEqual(p_on[-1], p_off[-1])
@@ -2390,19 +2507,17 @@ class TestAgentLink(PresenceCase):
     def test_session_name_segment_can_shrink_or_go(self):
         self.tx(asst(NOW - 2, "tool_use"))
         self.actions_on()
-        for mode, want in (("icon", "◈"), ("1", "◈ polish-the-hud"), ("0", None)):
+        for mode, want in (("icon", None), ("1", "◈ polish-the-hud"), ("0", None)):
             os.environ["RETRO_HUD_SESSION_NAME"] = mode
             payload = self.payload()
             payload["session_name"] = "polish-the-hud"
             rows = sl.render(payload, 160, NOW)
-            links = self.name_links(rows[1] if mode == "icon" else rows[0])   # the icon: bottom-right
-            if want is None:
+            links = self.name_links(rows[0])
+            if want is None:                       # 0, and the old icon mode: no button at all
                 self.assertEqual(links, [], mode)
                 self.assertNotIn("◈", sl.strip_ansi(rows[0]) + sl.strip_ansi(rows[1]))
             else:
                 self.assertEqual([sl.strip_ansi(t) for _, t in links], [want], (mode, rows))
-            if mode == "icon":
-                self.assertRegex(sl.strip_ansi(rows[1]), r"◈┘$")
         os.environ.pop("RETRO_HUD_SESSION_NAME", None)
 
     def test_session_name_segment_links_to_the_agent_menu(self):
@@ -3544,6 +3659,11 @@ class TestCreatureMovement(unittest.TestCase):
             self.assertTrue(0 <= p["pos"] <= max(cols - 13, 0))
 
 
+def _bar(row):
+    """A row's plain text without the outside button column (RETRO_HUD_HOME_URL)."""
+    return re.sub(r" [ ⌂↩]$", "", sl.strip_ansi(row))
+
+
 def _cells(plain):
     """A plain string as terminal cells: a wide char is followed by ""."""
     out = []
@@ -3680,7 +3800,7 @@ class TestCreatureHud(CreatureCase):
                         self.assertEqual(on[1:], off, cols)
                         self.assertEqual(on[0], sl.R, cols)
                         continue
-                    p_on, p_off = sl.strip_ansi(on[1]), sl.strip_ansi(off[0])
+                    p_on, p_off = _bar(on[1]), _bar(off[0])
                     self.assertEqual(sl.vislen(on[1]), sl.vislen(off[0]), cols)
                     # the creature's rule holds no spaces (the 2.x one may
                     # carry a bubble): its last space ends the segments
@@ -3712,7 +3832,7 @@ class TestCreatureHud(CreatureCase):
         first = self.rows(NOW)
         later = self.rows(NOW + 40)
         seed = sl.creature_seed(None, "", self.SID)
-        segs = re.match(r"^(.*) [^ ]*┐$", sl.strip_ansi(later[1])).group(1)
+        segs = re.match(r"^(.*) [^ ]*┐$", _bar(later[1])).group(1)
         track = 160 - sl.vwidth(segs) - 2
         for now, rows in ((NOW, first), (NOW + 40, later)):
             p = sl.pose(seed, "working", NOW, now, track, "alien")
@@ -3817,6 +3937,49 @@ class TestCreatureHud(CreatureCase):
             steady = sl.pose(3, "yours", None, NOW + el, 60)["canvas"]
             self.assertEqual(cv, steady, el)
         self.assertEqual(self.state_file()["mood"], "working")  # the gesture is not stored
+
+
+class TestSessionsSegment(PresenceCase):
+    """RETRO_HUD_SESSIONS=1: ▣ N other live Claude sessions from the presence cache,
+    ⚑ M of them needing you, linked to retro-hud://sessions."""
+
+    def others(self, *states, stale=()):
+        now = time.time()
+        os.makedirs(self.cache, exist_ok=True)
+        for i, st in enumerate(states):
+            path = os.path.join(self.cache, "%08d-0000-4000-8000-000000000000.state.json" % i)
+            with open(path, "w") as f:
+                json.dump({"state": st, "since": now - 30}, f)
+            if i in stale:
+                os.utime(path, (now - 3600, now - 3600))
+
+    def test_counts_fresh_other_sessions(self):
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_SESSIONS"] = "1"
+        self.addCleanup(os.environ.pop, "RETRO_HUD_SESSIONS", None)
+        self.others("working", "needs", "idle", "needs", stale=(3,))
+        row = sl.strip_ansi(sl.render(self.payload(FULL), 200, int(time.time()))[1])
+        self.assertIn("▣ 3", row)              # three fresh others (the stale fourth is gone)
+        self.assertIn("⚑ 1", row)              # one of them needs you
+        os.environ["RETRO_HUD_SESSIONS"] = "0"
+        self.assertNotIn("▣", sl.strip_ansi(sl.render(self.payload(FULL), 200, int(time.time()))[1]))
+
+    def test_own_session_is_not_counted_and_none_shows_nothing(self):
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_SESSIONS"] = "1"
+        self.addCleanup(os.environ.pop, "RETRO_HUD_SESSIONS", None)
+        row = sl.strip_ansi(sl.render(self.payload(FULL), 200, int(time.time()))[1])
+        self.assertNotIn("▣", row)
+
+    def test_links_to_the_session_list(self):
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_SESSIONS"] = "1"
+        self.addCleanup(os.environ.pop, "RETRO_HUD_SESSIONS", None)
+        self.others("working")
+        os.environ.update({"RETRO_HUD_ACTIONS": "1", "TMUX_PANE": "%7", "TMUX": "/tmp/tmux-1000/default,1,0"})
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in ("RETRO_HUD_ACTIONS", "TMUX_PANE", "TMUX")])
+        row = sl.render(self.payload(FULL), 200, int(time.time()))[1]
+        self.assertIn("\x1b]8;;retro-hud://sessions?pane=%257&sock=/tmp/tmux-1000/default\x07▣ 1", row)
 
 
 class TestCreatureSize(PresenceCase):
@@ -4323,7 +4486,7 @@ class TestTinyFrame(CreatureCase):
                 self.assertEqual(len(on), 2)
                 self.assertEqual(on[1], off[1], cols)
                 self.assertEqual(sl.vislen(on[0]), sl.vislen(off[0]), cols)
-                self.assertEqual(sl.strip_ansi(on[0])[-1], "┐")
+                self.assertEqual(_bar(on[0])[-1], "┐")
 
     def test_tick_s_is_honoured(self):
         os.environ["RETRO_HUD_CREATURE"] = "tiny"

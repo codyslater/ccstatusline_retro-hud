@@ -584,7 +584,7 @@ fi
 # ── URL form ──
 [ $# -eq 1 ] || reject "expected one argument, got $#"
 URL=$1
-re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent|card)(\?([A-Za-z0-9_=&%.:/~+-]*))?$'
+re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent|card|sessions|needs|switch)(\?([A-Za-z0-9_=&%.:/~+-]*))?$'
 [[ $URL =~ $re ]] || reject "$(printf '%q' "$URL")"
 ACTION=${BASH_REMATCH[1]}
 QUERY=${BASH_REMATCH[3]}
@@ -596,7 +596,7 @@ urldecode() {  # the trailing x keeps decoded trailing newlines visible
     printf x
 }
 
-PANE="" CUR="" has_sock=0
+PANE="" CUR="" TO="" has_sock=0
 IFS='&' read -ra pairs <<<"$QUERY"
 for pair in "${pairs[@]}"; do
     [[ $pair == *=* ]] || continue
@@ -607,13 +607,14 @@ for pair in "${pairs[@]}"; do
         pane) PANE=$v ;;
         sock) SOCK=$v has_sock=1 ;;
         cur) CUR=$v ;;
+        to) TO=$v ;;      # switch: the tmux session to switch the client to
         # unknown keys (including a `cwd`) are ignored, so the contract can
         # grow; directories always come from tmux, never from a link
         *) ;;
     esac
 done
 
-case $ACTION in usage) need_pane=0 ;; *) need_pane=1 ;; esac
+case $ACTION in usage | sessions | needs | switch) need_pane=0 ;; *) need_pane=1 ;; esac
 if [ "$need_pane" = 1 ] || [ -n "$PANE" ]; then
     [[ $PANE =~ ^%[0-9]+$ ]] || reject "$ACTION: bad pane $(printf '%q' "$PANE")"
 fi
@@ -622,6 +623,9 @@ if [ "$has_sock" = 1 ]; then
 fi
 if [ -n "$CUR" ]; then
     valid_level "$CUR" || reject "$ACTION: bad cur $(printf '%q' "$CUR")"
+fi
+if [ -n "$TO" ]; then
+    [[ $TO =~ ^[A-Za-z0-9_.:@-]+$ ]] || reject "$ACTION: bad session name $(printf '%q' "$TO")"
 fi
 
 case $ACTION in
@@ -744,6 +748,107 @@ show_cloud() {  # pane; after agent_target
     log "cloud for $pane written to $MENU_FILE"
 }
 
+# ── sessions: every tmux session on this server with a pane running Claude ──
+# What the HUD's presence cache knows about each (pane-<N>.sid -> <sid>.state.json)
+# gives the state word and its age; a Claude pane the cache has not mapped shows as
+# "unknown". One `list-panes -a` call; the clicking client's own session is marked.
+# A local extension that keeps its own session list handles retro-hud://sessions
+# before this runs and exits; this is the generic list others can build on.
+SESSION_WORDS='
+import json, os, sys, time
+cache, me = sys.argv[1], sys.argv[2]
+WORD = {"working": ("working", "#[fg=colour46]"), "yours": ("your turn", "#[fg=colour51]"),
+        "needs": ("needs you", "#[fg=colour226,bold]"), "idle": ("idle", "#[dim]"),
+        "asleep": ("asleep", "#[dim]"), "error": ("error", "#[fg=colour196]")}
+RANK = {"needs": 0, "yours": 1, "working": 2, "error": 3, "idle": 4, "asleep": 5}
+now = time.time()
+seen = {}
+for line in sys.stdin.read().split("\n"):
+    f = line.split("\t")
+    if len(f) < 4:
+        continue
+    name, pane, cmd, pid = f[0], f[1], f[2], f[3]
+    runs = cmd == "claude"
+    if not runs and pid.isdigit():  # a launcher in front: a direct child named claude
+        try:
+            for p in os.listdir("/proc"):
+                if p.isdigit():
+                    st = open("/proc/%s/stat" % p).read()
+                    if st.split(") ")[-1].split()[1] == pid and "(claude)" in st:
+                        runs = True
+                        break
+        except OSError:
+            pass
+    if not runs:
+        continue
+    state, since = None, None
+    try:
+        sid = open(os.path.join(cache, "pane-%s.sid" % pane.lstrip("%"))).read(256).strip()
+        d = json.load(open(os.path.join(cache, sid + ".state.json")))
+        state, since = d.get("state"), d.get("since")
+    except (OSError, ValueError):
+        pass
+    if name in seen and state not in RANK:
+        continue
+    seen[name] = (state, since)
+rows = []
+for name, (state, since) in seen.items():
+    word, style = WORD.get(state, ("unknown", "#[dim]"))
+    age = ""
+    if isinstance(since, (int, float)) and now >= since:
+        s = int(now - since)
+        age = "%ds" % s if s < 60 else "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600)
+    rows.append({"name": name, "state": state if state in RANK else "unknown", "word": word,
+                 "style": style, "age": age, "current": name == me, "rank": RANK.get(state, 6)})
+rows.sort(key=lambda r: (r["current"], r["rank"], r["name"]))
+print(json.dumps(rows))
+'
+
+sessions_rows() {  # stdout: the JSON list (after need_client)
+    local cache me
+    cache=$(presence_cache) || cache=""
+    me=$(tm display -p -c "$CLIENT" '#{session_name}' 2>/dev/null) || me=""
+    tm list-panes -a -F $'#{session_name}\t#{pane_id}\t#{pane_current_command}\t#{pane_pid}' 2>/dev/null |
+        python3 -I -c "$SESSION_WORDS" "$cache" "$me"
+}
+
+show_sessions() {
+    local rows items=() keys="asdfgwertzxcvb123456789" i=0 first="" n
+    need_client
+    rows=$(sessions_rows) || rows="[]"
+    n=$(printf '%s' "$rows" | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null) || n=0
+    first=$(printf '%s' "$rows" | python3 -I -c 'import json,sys
+r = [x for x in json.load(sys.stdin) if x["state"] == "needs" and not x["current"]]
+print(r[0]["name"] if r else "")' 2>/dev/null) || first=""
+    if [ -n "$first" ]; then
+        items+=("⇢  first that needs you: $first" n "switch-client -c $(tmq "$CLIENT") -t $(tmq "=$first")")
+    else
+        items+=("-⇢  nobody needs you" "" "")
+    fi
+    while IFS=$'\t' read -r name word style age current; do
+        [ -n "$name" ] || continue
+        local text="$name   $style$word#[default]${age:+ $age}"
+        if [ "$current" = 1 ]; then
+            items+=("-$text · here" "" "")
+        else
+            items+=("$text" "${keys:$i:1}" "switch-client -c $(tmq "$CLIENT") -t $(tmq "=$name")")
+            i=$((i + 1))
+        fi
+    done < <(printf '%s' "$rows" | python3 -I -c 'import json,sys
+for x in json.load(sys.stdin):
+    print("\t".join([x["name"], x["word"], x["style"], x["age"], "1" if x["current"] else "0"]))' 2>/dev/null)
+    [ "$n" -gt 0 ] || items+=("-no Claude session in tmux" "" "")
+    show_menu " sessions ($n) " "${items[@]}"
+}
+
+switch_to() {  # session name: switch the clicking client there
+    need_client
+    tm switch-client -c "$CLIENT" -t "=$1" 2>/dev/null || {
+        log "switch: no session $1"
+        tm display-message -c "$CLIENT" -d 2500 "retro-hud: no tmux session $1" || true
+    }
+}
+
 case $ACTION in
     usage)
         xdg-open "$USAGE_URL" >/dev/null 2>&1 || log "usage: xdg-open failed"
@@ -828,6 +933,24 @@ case $ACTION in
     agent)
         agent_target "$PANE"
         agent_menu "$PANE"
+        ;;
+    sessions)
+        show_sessions
+        ;;
+    needs)
+        need_client
+        first=$(sessions_rows | python3 -I -c 'import json,sys
+r = [x for x in json.load(sys.stdin) if x["state"] == "needs" and not x["current"]]
+print(r[0]["name"] if r else "")' 2>/dev/null) || first=""
+        if [ -n "$first" ]; then
+            switch_to "$first"
+        else
+            tm display-message -c "$CLIENT" -d 2500 "retro-hud: nobody needs you right now" || true
+        fi
+        ;;
+    switch)
+        [ -n "$TO" ] || reject "switch: no session named (to=)"
+        switch_to "$TO"
         ;;
     card)
         agent_target "$PANE"

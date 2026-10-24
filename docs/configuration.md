@@ -15,7 +15,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_ALIEN` | `1` | `0` grounds the creature (or the 2.x alien) and with it all agent presence: no transcript reads, no files. With `tall` the head line stays, blank |
 | `RETRO_HUD_PRESENCE` | `1` | `0` restores the gauge-only creature: it reacts to the gauges but not to what the agent is doing |
 | `RETRO_HUD_SPRITE` | `alien` | creature family: `blob`, `beast`, `alien`, `bot`, `robot` (the 2.x names `cat` and `ghost` map to `beast` and `blob`; `robot` is its own family since 3.1). With `RETRO_HUD_CREATURE=0`, the text-art set: `alien`, `cat`, `robot`, `ghost` |
-| `RETRO_HUD_SESSION_NAME` | `1` | the `◈ name` segment (Claude Code's session name, the agent menu's link): `icon` keeps just the `◈`, at the right edge of row 2 inside the corner, `0` drops it (the creature's cloud reaches the same menu) |
+| `RETRO_HUD_SESSION_NAME` | `1` | the `◈ name` segment (Claude Code's session name, the agent menu's link): `0` drops it (the creature's cloud reaches the same menu with `m`) |
 | `RETRO_HUD_AGENT_NAME` | — | name the agent that lives in this terminal; prefixes state bubbles (`Nova: ready`) |
 | `RETRO_HUD_BUBBLES` | `alerts` | what the creature may say: `alerts` = only `need you` / `compact?` / `limit soon` plus events-channel messages; `all` = also `ready`, `hm.`, `z`/`zZ` and idle quips; `off` = nothing |
 | `RETRO_HUD_QUIPS` | `1` | `0` turns off the rare idle quips |
@@ -29,7 +29,9 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_MARGIN` | `4` | columns kept free at the right edge (Claude Code's prompt footer insets the status line by 4) |
 | `RETRO_HUD_WIDTH` | — | hard width override when `$COLUMNS` is wrong |
 | `RETRO_HUD_EMOJI` | `2` | `1`: count emoji as one cell; `0`: skip the folder emoji |
-| `RETRO_HUD_HOME_URL` | — | a hyperlinked `⌂` at the top-right, inside the `┐`: a jump-home link for multi-session setups. Point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions. Unset or empty: no glyph |
+| `RETRO_HUD_AT_HOME` | — | `1` when this session is the home session: the `⌂` is not shown there; after a `⌂` click a `↩` shows instead (see `RETRO_HUD_BACK_URL`) |
+| `RETRO_HUD_BACK_URL` | — | the return button's URL (`↩`, outside the frame past the `┘`): shown on the home session while `<cache>/home-from` names the session a `⌂` click came from; the handler writes that file on a home click and removes it on a return |
+| `RETRO_HUD_HOME_URL` | — | a hyperlinked `⌂` outside the frame at the far right (past the `┐`; the blank cell under it carries the same link, so either row clicks); the column stays reserved on the home session so the end bars line up: a jump-home link for multi-session setups. Point it at any URL your desktop can open, e.g. a custom scheme that switches tmux sessions. Unset or empty: no glyph |
 | `RETRO_HUD_ACTIONS` | — | `1` turns on [click actions](../README.md#click-actions): model, effort, context gauge, cost and lines link to `retro-hud://…` inside tmux; the rate-limit gauges link to `retro-hud://usage` everywhere. A comma list (`model,diff,agent,card`) links only those actions (names: `model`, `effort`, `ctx`, `cost`, `diff`, `usage`, `agent`, `card`); the rest render plain. Needs a scheme handler (`install.sh --handler`); for click menus at the pointer, the tmux binding in the README ("Click in tmux"). Any other value: off, output unchanged |
 
 Example:
