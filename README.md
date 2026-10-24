@@ -7,9 +7,9 @@
 ![deps](https://img.shields.io/badge/dependencies-none-purple)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-![retro-hud in Claude Code: a generic demo session](docs/media/hud-3.1.1b.png)
+![retro-hud in Claude Code: a generic demo session](docs/media/hud-3.1.1c.png)
 
-![the creature at work: walking while the agent works, bouncing with a ? when it needs you, waving when the turn is yours, dimming when idle](docs/media/creature-3.1.1.gif)
+![the creature at work: walking while the agent works, bouncing with a ? when it needs you, waving when the turn is yours, dimming when idle](docs/media/creature-3.1.1b.gif)
 
 Two rows in a closed $\color{#00ff00}{\textsf{neon green}}$ wireframe with
 $\color{#00ffff}{\textsf{cyan}}$ `//` separators and a [pixel creature](#agent-presence)
