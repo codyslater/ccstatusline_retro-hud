@@ -487,8 +487,8 @@ class TestHomeLink(unittest.TestCase):
         rows = sl.render(copy.deepcopy(FULL), 220, NOW)
         self.assertIn("\x1b]8;;" + self.URL + "\a⌂\x1b]8;;\a", rows[0])
         plain = sl.strip_ansi(rows[1])
-        self.assertRegex(plain, r"▐█ reviewer ─+┘ $")           # row 2: a blank cell past the corner …
-        self.assertIn("\x1b]8;;" + self.URL + "\a \x1b]8;;\a", rows[1])   # … carrying the same link
+        self.assertRegex(plain, r"▐█ reviewer ─+┘ $")           # row 2: a plain blank cell past the corner
+        self.assertNotIn(self.URL, rows[1])                        # no hidden link there
         self.assertRegex(sl.strip_ansi(rows[0]), r"─┐⌂$")         # the ⌂ right after the top-right corner
         self.assertNotIn("⌂", plain)
         self.assertEqual(sl.vislen(rows[0]), 220)
@@ -528,7 +528,12 @@ class TestHomeLink(unittest.TestCase):
             self.assertRegex(sl.strip_ansi(rows[0]), r"┐ $")
             self.assertRegex(sl.strip_ansi(rows[1]), r"┘↩$")
             self.assertIn("\x1b]8;;retro-hud://back\a↩\x1b]8;;\a", rows[1])
-            self.assertIn("\x1b]8;;retro-hud://back\a \x1b]8;;\a", rows[0])     # the cell above: same link
+            self.assertEqual(rows[0].count("retro-hud://back"), 0)                # the cell above: plain, no hidden link
+            # a stale record (older than 12 h) shows no ↩
+            old = time.time() - 20 * 3600
+            os.utime(os.path.join(cache, "home-from"), (old, old))
+            self.assertNotIn("↩", sl.strip_ansi(sl.render(copy.deepcopy(FULL), 220, NOW)[1]))
+            os.utime(os.path.join(cache, "home-from"), None)
             # inside tmux the retro-hud:// links name the pane and socket, like every action
             os.environ.update({"TMUX_PANE": "%7", "TMUX": "/tmp/tmux-1000/default,1,0"})
             try:
@@ -1639,8 +1644,9 @@ class TestHandlerSessions(TestHandlerAgent):
         self.assertTrue(names[3].startswith("-work   #[fg=colour46]working#[default]") and names[3].endswith("· here"), names)
         self.assertNotIn("shell", " ".join(names))                 # a bash pane is not a session to list
         cmds = [items[i + 2] for i in range(0, len(items), 3)]
-        self.assertEqual(cmds[1], "switch-client -c '/dev/pts/3' -t '=review'")
-        self.assertEqual(cmds[0], "switch-client -c '/dev/pts/3' -t '=review'")
+        want = "run-shell -b \"RETRO_HUD_CLIENT=/dev/pts/3 '" + HANDLER + "' 'retro-hud://switch?to=review'\""
+        self.assertEqual(cmds[1], want)                            # through the handler: arrivals home get recorded
+        self.assertEqual(cmds[0], want)
         self.assertEqual(cmds[3], "")                              # the current session: disabled
 
     def test_menu_in_the_binding_goes_to_the_menu_file(self):
@@ -1651,8 +1657,7 @@ class TestHandlerSessions(TestHandlerAgent):
         with open(menu_file) as f:
             line = f.read()
         self.assertTrue(line.startswith("display-menu -O -c '/dev/pts/3' -T ' sessions (3) ' -x M -y '#{popup_mouse_y}' --"), line)
-        self.assertIn("=review", line)
-        self.assertIn("switch-client", line)
+        self.assertIn("retro-hud://switch?to=review", line)
         self.assertEqual(self.tmux_calls("display-menu"), [])
 
     def test_unmapped_claude_pane_is_unknown_and_an_empty_server_says_so(self):
@@ -1708,6 +1713,18 @@ class TestHandlerHomeBack(TestHandlerAgent):
         self.assertFalse(os.path.exists(self.home_from()))
         self.run_handler("retro-hud://back")
         self.assertEqual(self.tmux_calls("switch-client")[-1], ["switch-client", "-c", "/dev/pts/3", "-l"])
+
+    def test_arriving_home_by_the_list_records_the_origin_too(self):
+        self.run_handler("retro-hud://switch?to=home", FAKE_TMUX_CLIENT_SESSION="work")
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=home"]])
+        with open(self.home_from()) as f:
+            self.assertEqual(f.read(), "work\n")
+        self.run_handler("retro-hud://switch?to=review", FAKE_TMUX_CLIENT_SESSION="home")   # leaving home: kept
+        with open(self.home_from()) as f:
+            self.assertEqual(f.read(), "work\n")
+        self.run_handler("retro-hud://switch?to=home", FAKE_TMUX_CLIENT_SESSION="home")     # already home: unchanged
+        with open(self.home_from()) as f:
+            self.assertEqual(f.read(), "work\n")
 
     def test_home_session_name_is_checked(self):
         self.run_handler("retro-hud://home", RETRO_HUD_HOME_SESSION="a b")

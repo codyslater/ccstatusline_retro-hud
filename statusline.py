@@ -2616,9 +2616,9 @@ def render(data, cols, now, _edges=True):
     # whatever shows): away from home, ⌂ (RETRO_HUD_HOME_URL) right after the ┐; on
     # the home session (RETRO_HUD_AT_HOME=1) after a ⌂ click, ↩
     # (RETRO_HUD_BACK_URL) past the ┘ on row 2, which goes back to the session
-    # you came from (the handler keeps that in <cache>/home-from); started on
-    # home, neither. The other cell of the column carries the same link, blank,
-    # so each button is two rows tall to the mouse and one glyph to the eye.
+    # you came from (the handler keeps that in <cache>/home-from, written on
+    # every arrival at home it makes, cleared by ↩, ignored after 12 h); started
+    # on home, neither. The other cell of the column is a plain blank.
     # With the frame off the button is an ordinary segment.
     home_url = _clean_url(os.environ.get("RETRO_HUD_HOME_URL", ""))
     back_url = _clean_url(os.environ.get("RETRO_HUD_BACK_URL", ""))
@@ -2862,9 +2862,8 @@ def render(data, cols, now, _edges=True):
     if edge_w and not all(_closed(r, c) for r, c in zip(rows[-2:], "┐┘")):
         return render(data, full_cols, now, _edges=False)   # no room: the ⌂ as a segment
     if edge_w:
-        blank = NEON_GREEN + link(button_url, " ") + R      # the same link, blank
-        top = home_seg if button == "⌂" else blank if button else " "
-        bottom = home_seg if button == "↩" else blank if button else " "
+        top = home_seg if button == "⌂" else " "            # the other cell: plain, no hidden link
+        bottom = home_seg if button == "↩" else " "
         rows = [r + top if i == len(rows) - 2 else
                 r + bottom if i == len(rows) - 1 else r
                 for i, r in enumerate(rows)]
@@ -2876,14 +2875,22 @@ def _clean_url(url):
     return "".join(ch for ch in url if ch.isprintable()).strip()
 
 
+HOME_FROM_MAX_S = 12 * 3600   # an older record is a stale one: no ↩ for it
+
+
 def _home_from():
-    """The session a ⌂ click came from, if the handler recorded one in
-    <cache>/home-from (it removes the file when ↩ is used)."""
+    """The session you came home from, if the handler recorded one in
+    <cache>/home-from within the last HOME_FROM_MAX_S seconds (it writes
+    the file on every arrival at home it makes and removes it when ↩ is
+    used)."""
     d = cache_dir(create=False)
     if not d:
         return ""
+    path = os.path.join(d, "home-from")
     try:
-        with open(os.path.join(d, "home-from")) as f:
+        if time.time() - os.path.getmtime(path) > HOME_FROM_MAX_S:
+            return ""
+        with open(path) as f:
             return f.read(256).strip()
     except OSError:
         return ""

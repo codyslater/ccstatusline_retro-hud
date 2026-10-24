@@ -813,6 +813,12 @@ sessions_rows() {  # stdout: the JSON list (after need_client)
         python3 -I -c "$SESSION_WORDS" "$cache" "$me"
 }
 
+switch_cmd() {  # a menu item that re-enters this script to switch to a session
+    local url="retro-hud://switch?to=$1"
+    [ -z "$SOCK" ] || url+="&sock=$SOCK"
+    printf 'run-shell -b "RETRO_HUD_CLIENT=%s '"'"'%s'"'"' '"'"'%s'"'"'"' "$CLIENT" "$SELF" "$url"
+}
+
 show_sessions() {
     local rows items=() keys="asdfgwertzxcvb123456789" i=0 first="" n
     need_client
@@ -822,7 +828,7 @@ show_sessions() {
 r = [x for x in json.load(sys.stdin) if x["state"] == "needs" and not x["current"]]
 print(r[0]["name"] if r else "")' 2>/dev/null) || first=""
     if [ -n "$first" ]; then
-        items+=("⇢  first that needs you: $first" n "switch-client -c $(tmq "$CLIENT") -t $(tmq "=$first")")
+        items+=("⇢  first that needs you: $first" n "$(switch_cmd "$first")")
     else
         items+=("-⇢  nobody needs you" "" "")
     fi
@@ -832,7 +838,7 @@ print(r[0]["name"] if r else "")' 2>/dev/null) || first=""
         if [ "$current" = 1 ]; then
             items+=("-$text · here" "" "")
         else
-            items+=("$text" "${keys:$i:1}" "switch-client -c $(tmq "$CLIENT") -t $(tmq "=$name")")
+            items+=("$text" "${keys:$i:1}" "$(switch_cmd "$name")")
             i=$((i + 1))
         fi
     done < <(printf '%s' "$rows" | python3 -I -c 'import json,sys
@@ -852,18 +858,32 @@ home_from_file() {
     printf '%s/home-from' "$d"
 }
 
+home_session() { printf '%s' "${RETRO_HUD_HOME_SESSION:-${cfg_home_session:-home}}"; }
+
+# Any arrival at home THROUGH this handler (⌂, the session list, needs, switch)
+# records where it came from, so the ↩ on the home bar always means "the session
+# I was in before I came here"; ↩ clears it. Arrivals tmux makes on its own are
+# not seen, so the record can be stale: the bar ignores one older than 12 h.
+note_arrival() {  # destination session; CLIENT set
+    local home cur f
+    home=$(home_session)
+    [ "$1" = "$home" ] || return 0
+    cur=$(tm display -p -c "$CLIENT" '#{session_name}' 2>/dev/null) || cur=""
+    [ -n "$cur" ] && [ "$cur" != "$home" ] && [[ $cur =~ ^[A-Za-z0-9_.:@-]+$ ]] || return 0
+    f=$(home_from_file) || return 0
+    mkdir -p "$(dirname "$f")" 2>/dev/null
+    printf '%s\n' "$cur" >"$f.tmp" && mv -f "$f.tmp" "$f" || log "home-from not written"
+}
+
 go_home() {
-    local home=${RETRO_HUD_HOME_SESSION:-${cfg_home_session:-home}} cur f
+    local home cur
+    home=$(home_session)
     need_client
     [[ $home =~ ^[A-Za-z0-9_.:@-]+$ ]] || reject "home: bad RETRO_HUD_HOME_SESSION $(printf '%q' "$home")"
     cur=$(tm display -p -c "$CLIENT" '#{session_name}' 2>/dev/null) || cur=""
     if [ "$cur" = "$home" ]; then
         tm display-message -c "$CLIENT" -d 1500 "retro-hud: already home" || true
         return 0
-    fi
-    if [[ $cur =~ ^[A-Za-z0-9_.:@-]+$ ]] && f=$(home_from_file); then
-        mkdir -p "$(dirname "$f")" 2>/dev/null
-        printf '%s\n' "$cur" >"$f.tmp" && mv -f "$f.tmp" "$f" || log "home-from not written"
     fi
     switch_to "$home"
 }
@@ -884,6 +904,7 @@ go_back() {
 
 switch_to() {  # session name: switch the clicking client there
     need_client
+    note_arrival "$1"
     tm switch-client -c "$CLIENT" -t "=$1" 2>/dev/null || {
         log "switch: no session $1"
         tm display-message -c "$CLIENT" -d 2500 "retro-hud: no tmux session $1" || true
