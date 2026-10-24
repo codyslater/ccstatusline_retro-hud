@@ -959,7 +959,7 @@ case $ACTION in
         git_last="$git_base show --stat --patch --no-ext-diff --no-textconv --color=always --no-prefix HEAD"
         # the pager's text: a summary line, the file list, then hunks; git's plumbing lines
         # (diff --git, index …) are dropped, file headers read --- app.py / +++ app.py
-        tidy="sed -E 's/^(\x1b\[[0-9;]*m)*(diff --git|index )[^\n]*//; /^$/N; /^\n$/D'"
+        tidy="sed -E '/^(\\x1b\\[[0-9;]*m)*(diff --git|index )/d'"
         guard=""
         [ -z "$POPUP_MARK" ] || guard="touch $(tmq "$POPUP_MARK"); trap $(tmq "rm -f '$POPUP_MARK'") EXIT; "
         # A clean tree shows the last commit instead of a blank pager. q closes, the wheel
