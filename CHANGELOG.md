@@ -4,6 +4,17 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [Unreleased]
+
+### Added
+- **Sessions on other machines** join the session list and the `▣`/`⚑`
+  counts through a feed: a `<host>.json` per machine under
+  `~/.cache/retro-hud/remote/` (`RETRO_HUD_REMOTE_DIR`), written by any
+  sync you run. Rows read `⌁ host:name` with the usual state word; a click
+  runs the file's `open` command (default ssh + tmux attach) in a wrapper
+  session here and switches to it; `needs` jumps there too. A feed older
+  than 15 minutes is ignored.
+
 ## [v3.1.2] — 2026-10-24
 
 ### Fixed

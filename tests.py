@@ -763,6 +763,9 @@ elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd:
     sys.stdout.write(answer.get(cmd[-1], "") + "\n")
 elif cmd[:1] == ["show-options"]:
     sys.stdout.write(os.environ.get("FAKE_TMUX_FEATURES", "") + "\n")
+elif cmd[:1] == ["has-session"]:                       # only the sessions FAKE_TMUX_SESSIONS names exist
+    name = cmd[cmd.index("-t") + 1].lstrip("=") if "-t" in cmd else ""
+    sys.exit(0 if name in os.environ.get("FAKE_TMUX_SESSIONS", "").split() else 1)
 elif cmd[:1] == ["display-popup"]:
     import re, shutil
     m = re.fullmatch(r"bash '([^']+)'", cmd[-1])        # keep the popup's files: the handler removes them after
@@ -1680,9 +1683,81 @@ class TestHandlerSessions(TestHandlerAgent):
     def test_switch_takes_a_plain_session_name_only(self):
         self.run_handler("retro-hud://switch?to=review")
         self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=review"]])
-        for bad in ("a%20b", "x%3By", "%24%28id%29", "..%2Fx", ""):
+        for bad in ("a%20b", "x%3By", "%24%28id%29", "..%2Fx", "", "remote:lab:..%2Fx", "remote:a%20b:x",
+                    "remote:lab:x%3By", "remote:lab"):
             self.run_handler("retro-hud://switch?to=" + bad)
         self.assertEqual(len(self.tmux_calls("switch-client")), 1)
+        self.assertEqual(self.tmux_calls("new-session"), [])
+
+    # ── the remote feed: <host>.json files under <cache>/remote ──
+    def feed(self, host, sessions, open_cmd=None, age=0, where=None):
+        d = where or os.path.join(self.cache, "remote")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, host + ".json")
+        doc = {"host": host, "sessions": sessions}
+        if open_cmd:
+            doc["open"] = open_cmd
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        if age:
+            os.utime(path, (time.time() - age, time.time() - age))
+        return path
+
+    def test_remote_feed_rows_are_listed_with_their_host(self):
+        self.seed()
+        now = time.time()
+        self.feed("lab", [{"name": "dev_x", "state": "needs", "since": now - 30},
+                          {"name": "dev_p", "state": "paused", "since": now - 7200},
+                          {"name": "bad name", "state": "working"}, {"name": "dev_x", "state": "idle"}])
+        self.feed("gone", [{"name": "dev_old", "state": "working"}], age=3600)      # its sync is dead
+        p = self.run_handler(self.url("sessions"), FAKE_TMUX_PANES=self.PANES, FAKE_TMUX_CLIENT_SESSION="work")
+        self.assertEqual(p.returncode, 0, p.stderr.decode())
+        argv = self.tmux_calls("display-menu")[0]
+        self.assertEqual(argv[argv.index("-T") + 1], " sessions (5) ")
+        items = argv[argv.index("-T") + 2:]
+        names = [items[i] for i in range(0, len(items), 3)]
+        cmds = [items[i + 2] for i in range(0, len(items), 3)]
+        self.assertEqual(names[0], "⇢  first that needs you: review")           # a local one outranks a remote one
+        self.assertTrue(names[1].startswith("review   "), names)
+        self.assertTrue(names[2].startswith("⌁ lab:dev_x   #[fg=colour226,bold]needs you#[default] 30s"), names)
+        self.assertTrue(names[-2].startswith("⌁ lab:dev_p   #[dim]paused#[default] 2h"), names)
+        self.assertNotIn("dev_old", " ".join(names))
+        self.assertNotIn("bad name", " ".join(names))
+        self.assertEqual(names.count("⌁ lab:dev_x   #[fg=colour226,bold]needs you#[default] 30s"), 1)
+        self.assertEqual(cmds[2], "run-shell -b \"RETRO_HUD_CLIENT=/dev/pts/3 '" + HANDLER
+                         + "' 'retro-hud://switch?to=remote:lab:dev_x'\"")
+
+    def test_remote_feed_dir_can_be_elsewhere(self):
+        other = os.path.join(self.tmp, "feeds")
+        self.feed("lab", [{"name": "dev_x", "state": "working"}], where=other)
+        self.run_handler(self.url("sessions"), FAKE_TMUX_PANES="", RETRO_HUD_REMOTE_DIR=other)
+        self.assertIn("⌁ lab:dev_x   #[fg=colour46]working#[default]", " ".join(self.tmux_calls("display-menu")[0]))
+
+    def test_a_remote_row_opens_a_wrapper_session_and_switches_there(self):
+        self.feed("lab", [{"name": "dev_x", "state": "working"}])
+        self.run_handler("retro-hud://switch?to=remote:lab:dev_x", FAKE_TMUX_CLIENT_SESSION="work")
+        self.assertEqual(self.tmux_calls("has-session"), [["has-session", "-t", "=rh-lab-dev_x"]])
+        self.assertEqual(self.tmux_calls("new-session"),
+                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t lab tmux attach -t dev_x"]])
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=rh-lab-dev_x"]])
+        # a second click: the wrapper is there, just switch
+        self.run_handler("retro-hud://switch?to=remote:lab:dev_x", FAKE_TMUX_SESSIONS="rh-lab-dev_x")
+        self.assertEqual(len(self.tmux_calls("new-session")), 1)
+        self.assertEqual(len(self.tmux_calls("switch-client")), 2)
+
+    def test_the_feed_file_can_say_how_to_open_its_sessions(self):
+        self.feed("lab", [{"name": "dev.x", "state": "working"}], open_cmd="mosh {host} -- tmux a -t {name}")
+        self.run_handler("retro-hud://switch?to=remote:lab:dev.x")
+        self.assertEqual(self.tmux_calls("new-session"),
+                         [["new-session", "-d", "-s", "rh-lab-dev_x", "mosh lab -- tmux a -t dev.x"]])
+        # no feed file for the host: the default command still works
+        self.run_handler("retro-hud://switch?to=remote:other:s1")
+        self.assertEqual(self.tmux_calls("new-session")[-1][-1], "ssh -t other tmux attach -t s1")
+
+    def test_needs_jumps_to_a_remote_session_when_only_it_needs_you(self):
+        self.feed("lab", [{"name": "dev_x", "state": "needs", "since": time.time() - 5}])
+        self.run_handler("retro-hud://needs", FAKE_TMUX_PANES="work\t%7\tclaude\t1\n", FAKE_TMUX_CLIENT_SESSION="work")
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=rh-lab-dev_x"]])
 
 
 class TestHandlerHomeBack(TestHandlerAgent):
@@ -4023,6 +4098,29 @@ class TestSessionsSegment(PresenceCase):
         self.assertIn("⚑ 1", row)              # one of them needs you
         os.environ["RETRO_HUD_SESSIONS"] = "0"
         self.assertNotIn("▣", sl.strip_ansi(sl.render(self.payload(FULL), 200, int(time.time()))[1]))
+
+    def test_remote_feed_sessions_count_too(self):
+        self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))
+        os.environ["RETRO_HUD_SESSIONS"] = "1"
+        self.addCleanup(os.environ.pop, "RETRO_HUD_SESSIONS", None)
+        self.others("working")
+        d = os.path.join(self.cache, "remote")
+        os.makedirs(d)
+        now = time.time()
+        with open(os.path.join(d, "lab.json"), "w") as f:
+            json.dump({"host": "lab", "sessions": [{"name": "a", "state": "needs"}, {"name": "b", "state": "paused"}]}, f)
+        with open(os.path.join(d, "gone.json"), "w") as f:
+            json.dump({"host": "gone", "sessions": [{"name": "c", "state": "needs"}]}, f)
+        os.utime(os.path.join(d, "gone.json"), (now - 3600, now - 3600))
+        with open(os.path.join(d, "notes.txt"), "w") as f:
+            f.write("not a feed")
+        row = sl.strip_ansi(sl.render(self.payload(FULL), 200, int(time.time()))[1])
+        self.assertIn("▣ 3", row)              # one local other + two from the fresh feed
+        self.assertIn("⚑ 1", row)
+        os.environ["RETRO_HUD_REMOTE_DIR"] = os.path.join(self.tmp, "nowhere")
+        self.addCleanup(os.environ.pop, "RETRO_HUD_REMOTE_DIR", None)
+        row = sl.strip_ansi(sl.render(self.payload(FULL), 200, int(time.time()))[1])
+        self.assertIn("▣ 1", row)
 
     def test_own_session_is_not_counted_and_none_shows_nothing(self):
         self.tx(user(NOW - 50), asst(NOW - 2, "tool_use"))

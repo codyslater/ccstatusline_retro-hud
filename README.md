@@ -388,7 +388,8 @@ Run several Claude sessions in tmux and the bar keeps them in view:
 ![four Claude sessions on an orbit project: the creature's cloud and full card, the session list, a switch to the one that needs you, ⌂ home and ↩ back, the effort, context and model pickers, the diff, the agent menu, and the needs-you key](docs/media/sessions-3.1.2b.gif)
 
 `▣ 3` is the other Claude sessions this machine knows (from the presence
-cache the HUD already writes), `⚑ 1` how many of them need you. Click it
+cache the HUD already writes, plus the remote feed below), `⚑ 1` how many
+of them need you. Click it
 and a list opens at the pointer:
 
 ```
@@ -406,6 +407,28 @@ row jumps to whoever needs you; bind it to a key too:
 ```tmux
 bind N run-shell "RETRO_HUD_CLIENT=#{q:client_tty} $HOME/.claude/retro-hud-handler.sh retro-hud://needs"
 ```
+
+**Other machines.** Sessions elsewhere join the same list and counts
+through a feed: drop a `<host>.json` per machine into
+`~/.cache/retro-hud/remote/` (or `RETRO_HUD_REMOTE_DIR`), by whatever sync
+you already run (an `ssh` in a cron, `rsync`, a mount):
+
+```json
+{"host": "lab",
+ "open": "ssh -t {host} tmux attach -t {name}",
+ "sessions": [{"name": "train", "state": "needs", "since": 1761300000},
+              {"name": "sweep", "state": "paused"}]}
+```
+
+`state` is one of the creature's words (`working`, `yours`, `needs`,
+`idle`, `asleep`, `error`) or `paused`; `since` (epoch seconds) gives the
+age; `open` is optional, the default is the one shown. The rows read
+`⌁ lab:train   needs you 2m`, count in `▣`/`⚑`, and a click runs the open
+command in a wrapper tmux session here (`rh-lab-train`) and switches to it;
+when ssh ends the wrapper closes. A file older than 15 minutes is ignored:
+its sync has stopped. One way to write the feed is the HUD's own cache on
+the other machine: every `<sid>.state.json` there carries `state` and
+`since`.
 
 **Home and back.** Name one session your home (`RETRO_HUD_HOME_SESSION`,
 default `home`) and the bar shows a `⌂` right after the top-right corner in

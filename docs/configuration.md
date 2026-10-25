@@ -30,6 +30,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_WIDTH` | — | hard width override when `$COLUMNS` is wrong |
 | `RETRO_HUD_EMOJI` | `2` | `1`: count emoji as one cell; `0`: skip the folder emoji |
 | `RETRO_HUD_SESSIONS` | — | `1` adds `▣ N` to row 2: the other Claude sessions the presence cache knows, `⚑ M` of them needing you; a click opens the handler's session list (`retro-hud://sessions`) |
+| `RETRO_HUD_REMOTE_DIR` | `<cache>/remote` | the remote feed: one `<host>.json` per other machine (see [Sessions](../README.md#sessions)); its sessions join the list and the `▣`/`⚑` counts, a click opens the file's `open` command (default `ssh -t {host} tmux attach -t {name}`) in a wrapper session; also read from `~/.config/retro-hud/env` by the handler |
 | `RETRO_HUD_HOME_SESSION` | `home` | the tmux session the `⌂` goes to; also read from `~/.config/retro-hud/env` by the handler |
 | `RETRO_HUD_AT_HOME` | — | `1` when this session is the home session: the `⌂` is not shown there; after a `⌂` click a `↩` shows instead (see `RETRO_HUD_BACK_URL`) |
 | `RETRO_HUD_BACK_URL` | — | the return button's URL (`↩`, outside the frame past the `┘`): shown on the home session while `<cache>/home-from` names the session a `⌂` click came from; the handler writes that file on a home click and removes it on a return |

@@ -1000,7 +1000,41 @@ def other_sessions(sid, now):
         live += 1
         if st == "needs":
             needing += 1
+    for st in remote_states(now):
+        live += 1
+        if st == "needs":
+            needing += 1
     return live, needing
+
+
+def remote_states(now):
+    """The states of the sessions in the remote feed: every <host>.json under
+    RETRO_HUD_REMOTE_DIR (else <cache>/remote) written in the last
+    SESSIONS_FRESH_S seconds, as the handler reads it. [] without a feed."""
+    d = os.environ.get("RETRO_HUD_REMOTE_DIR", "")
+    if not d:
+        c = cache_dir(create=False)
+        d = os.path.join(c, "remote") if c else ""
+    out = []
+    try:
+        names = sorted(os.listdir(d)) if d else []
+    except OSError:
+        return out
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(d, name)
+        try:
+            if now - os.path.getmtime(path) > SESSIONS_FRESH_S:
+                continue
+            doc = _read_json(path)
+        except OSError:
+            continue
+        rows = doc.get("sessions") if isinstance(doc, dict) else None
+        for x in rows or []:
+            if isinstance(x, dict) and isinstance(x.get("name"), str):
+                out.append(x.get("state"))
+    return out
 
 
 def card_facts(data):

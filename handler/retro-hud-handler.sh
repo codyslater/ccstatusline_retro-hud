@@ -138,13 +138,13 @@ if [ -f "$LOCAL_EXT" ]; then
 fi
 
 # ── settings: environment first, then the config file, then defaults ──
-cfg_models="" cfg_usage_url="" cfg_agent_name="" cfg_cache_dir="" cfg_home_session=""
+cfg_models="" cfg_usage_url="" cfg_agent_name="" cfg_cache_dir="" cfg_home_session="" cfg_remote_dir=""
 if [ -f "$CONFIG" ]; then
     n=0
     while IFS= read -r line || [ -n "$line" ]; do
         n=$((n + 1))
         [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
-        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL|RETRO_HUD_AGENT_NAME|RETRO_HUD_CACHE_DIR|RETRO_HUD_HOME_SESSION)=(.*)$ ]]; then
+        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL|RETRO_HUD_AGENT_NAME|RETRO_HUD_CACHE_DIR|RETRO_HUD_HOME_SESSION|RETRO_HUD_REMOTE_DIR)=(.*)$ ]]; then
             key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
             if [[ $val =~ ^\"(.*)\"$ || $val =~ ^\'(.*)\'$ ]]; then
                 val=${BASH_REMATCH[1]}
@@ -155,6 +155,7 @@ if [ -f "$CONFIG" ]; then
                 RETRO_HUD_AGENT_NAME) cfg_agent_name=$val ;;
                 RETRO_HUD_CACHE_DIR) cfg_cache_dir=$val ;;
                 RETRO_HUD_HOME_SESSION) cfg_home_session=$val ;;
+                RETRO_HUD_REMOTE_DIR) cfg_remote_dir=$val ;;
             esac
         else
             log "config: ignored line $n of $CONFIG"
@@ -342,6 +343,24 @@ presence_cache() {
     fi
     if [[ $d != /* || $d == *[[:cntrl:]]* ]]; then
         log "agent: RETRO_HUD_CACHE_DIR must be an absolute path"
+        return 1
+    fi
+    printf '%s' "$d"
+}
+
+# The remote feed: RETRO_HUD_REMOTE_DIR, else <cache>/remote. Every <host>.json
+# there (written by whatever sync you run: ssh, rsync, a cron) lists the Claude
+# sessions on another machine; the session list shows them as ⌁ host:name and a
+# click opens the file's `open` command (default: ssh + tmux attach) in a wrapper
+# session here. A file older than 15 minutes is ignored: its sync is gone.
+remote_dir() {
+    local d=${RETRO_HUD_REMOTE_DIR:-$cfg_remote_dir} c
+    if [ -z "$d" ]; then
+        c=$(presence_cache) || return 1
+        d="$c/remote"
+    fi
+    if [[ $d != /* || $d == *[[:cntrl:]]* ]]; then
+        log "sessions: RETRO_HUD_REMOTE_DIR must be an absolute path"
         return 1
     fi
     printf '%s' "$d"
@@ -756,12 +775,15 @@ show_cloud() {  # pane; after agent_target
 # A local extension that keeps its own session list handles retro-hud://sessions
 # before this runs and exits; this is the generic list others can build on.
 SESSION_WORDS='
-import json, os, sys, time
-cache, me = sys.argv[1], sys.argv[2]
+import json, os, re, sys, time
+cache, me, remote = sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""
 WORD = {"working": ("working", "#[fg=colour46]"), "yours": ("your turn", "#[fg=colour51]"),
         "needs": ("needs you", "#[fg=colour226,bold]"), "idle": ("idle", "#[dim]"),
-        "asleep": ("asleep", "#[dim]"), "error": ("error", "#[fg=colour196]")}
-RANK = {"needs": 0, "yours": 1, "working": 2, "error": 3, "idle": 4, "asleep": 5}
+        "asleep": ("asleep", "#[dim]"), "error": ("error", "#[fg=colour196]"),
+        "paused": ("paused", "#[dim]")}
+RANK = {"needs": 0, "yours": 1, "working": 2, "error": 3, "idle": 4, "asleep": 5, "paused": 6}
+PART = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")   # a host or session name in a feed: no `:`
+FRESH = 15 * 60
 now = time.time()
 seen = {}
 for line in sys.stdin.read().split("\n"):
@@ -792,25 +814,58 @@ for line in sys.stdin.read().split("\n"):
     if name in seen and state not in RANK:
         continue
     seen[name] = (state, since)
-rows = []
-for name, (state, since) in seen.items():
+def row(name, state, since, current, remote=None):
     word, style = WORD.get(state, ("unknown", "#[dim]"))
     age = ""
     if isinstance(since, (int, float)) and now >= since:
         s = int(now - since)
         age = "%ds" % s if s < 60 else "%dm" % (s // 60) if s < 3600 else "%dh" % (s // 3600)
-    rows.append({"name": name, "state": state if state in RANK else "unknown", "word": word,
-                 "style": style, "age": age, "current": name == me, "rank": RANK.get(state, 6)})
-rows.sort(key=lambda r: (r["current"], r["rank"], r["name"]))
+    r = {"name": name, "state": state if state in RANK else "unknown", "word": word,
+         "style": style, "age": age, "current": current, "rank": RANK.get(state, 7)}
+    if remote:
+        r["remote"] = remote
+        r["target"] = "remote:%s:%s" % (remote, name)
+    return r
+rows = [row(name, state, since, name == me) for name, (state, since) in seen.items()]
+# the remote feed: <host>.json files written in the last FRESH seconds
+try:
+    feeds = sorted(os.listdir(remote)) if remote else []
+except OSError:
+    feeds = []
+for fn in feeds:
+    if not fn.endswith(".json"):
+        continue
+    path = os.path.join(remote, fn)
+    try:
+        if now - os.path.getmtime(path) > FRESH:
+            continue
+        d = json.load(open(path))
+    except (OSError, ValueError):
+        continue
+    host = d.get("host") if isinstance(d, dict) else None
+    host = host if isinstance(host, str) and PART.match(host) else fn[:-5]
+    if not PART.match(host):
+        continue
+    names = set()
+    for x in (d.get("sessions") if isinstance(d, dict) else None) or []:
+        if not isinstance(x, dict):
+            continue
+        name = x.get("name")
+        if not isinstance(name, str) or not PART.match(name) or name in names:
+            continue
+        names.add(name)
+        rows.append(row(name, x.get("state"), x.get("since"), False, remote=host))
+rows.sort(key=lambda r: (r["current"], r["rank"], r.get("remote", ""), r["name"]))
 print(json.dumps(rows))
 '
 
 sessions_rows() {  # stdout: the JSON list (after need_client)
-    local cache me
+    local cache me remote
     cache=$(presence_cache) || cache=""
     me=$(tm display -p -c "$CLIENT" '#{session_name}' 2>/dev/null) || me=""
+    remote=$(remote_dir) || remote=""
     tm list-panes -a -F $'#{session_name}\t#{pane_id}\t#{pane_current_command}\t#{pane_pid}' 2>/dev/null |
-        python3 -I -c "$SESSION_WORDS" "$cache" "$me"
+        python3 -I -c "$SESSION_WORDS" "$cache" "$me" "$remote"
 }
 
 switch_cmd() {  # a menu item that re-enters this script to switch to a session
@@ -826,24 +881,25 @@ show_sessions() {
     n=$(printf '%s' "$rows" | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null) || n=0
     first=$(printf '%s' "$rows" | python3 -I -c 'import json,sys
 r = [x for x in json.load(sys.stdin) if x["state"] == "needs" and not x["current"]]
-print(r[0]["name"] if r else "")' 2>/dev/null) || first=""
+print((r[0].get("target") or r[0]["name"]) if r else "")' 2>/dev/null) || first=""
     if [ -n "$first" ]; then
-        items+=("⇢  first that needs you: $first" n "$(switch_cmd "$first")")
+        items+=("⇢  first that needs you: ${first#remote:}" n "$(switch_cmd "$first")")
     else
         items+=("-⇢  nobody needs you" "" "")
     fi
-    while IFS=$'\t' read -r name word style age current; do
+    while IFS=$'\x1f' read -r name word style age current target remote; do   # \x1f: an empty field stays a field
         [ -n "$name" ] || continue
-        local text="$name   $style$word#[default]${age:+ $age}"
+        local text="${remote:+⌁ $remote:}$name   $style$word#[default]${age:+ $age}"
         if [ "$current" = 1 ]; then
             items+=("-$text · here" "" "")
         else
-            items+=("$text" "${keys:$i:1}" "$(switch_cmd "$name")")
+            items+=("$text" "${keys:$i:1}" "$(switch_cmd "${target:-$name}")")
             i=$((i + 1))
         fi
     done < <(printf '%s' "$rows" | python3 -I -c 'import json,sys
 for x in json.load(sys.stdin):
-    print("\t".join([x["name"], x["word"], x["style"], x["age"], "1" if x["current"] else "0"]))' 2>/dev/null)
+    print("\x1f".join([x["name"], x["word"], x["style"], x["age"], "1" if x["current"] else "0",
+                       x.get("target", ""), x.get("remote", "")]))' 2>/dev/null)
     [ "$n" -gt 0 ] || items+=("-no Claude session in tmux" "" "")
     show_menu " sessions ($n) " "${items[@]}"
 }
@@ -902,8 +958,47 @@ go_back() {
     fi
 }
 
-switch_to() {  # session name: switch the clicking client there
+# remote:<host>:<name> (a row from the remote feed): the feed file's `open`
+# command ({host} and {name} filled in; default ssh + tmux attach) runs in a
+# wrapper session here, rh-<host>-<name>, and the client goes there. A second
+# click finds the wrapper and just switches; when the command ends (detach,
+# a failed ssh) the wrapper closes and tmux puts the client elsewhere.
+remote_open() {  # host name: the wrapper session's name on stdout, or nothing
+    local host=$1 name=$2 d cmd w
+    [[ $host =~ ^[A-Za-z0-9_.@-]{1,64}$ && $name =~ ^[A-Za-z0-9_.@-]{1,64}$ ]] || return 1
+    d=$(remote_dir) || return 1
+    cmd=$(python3 -I -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    c = d.get("open") if isinstance(d, dict) else None
+    print(c if isinstance(c, str) and c.strip() and "\n" not in c else "")
+except (OSError, ValueError):
+    print("")' "$d/$host.json" 2>/dev/null) || cmd=""
+    [ -n "$cmd" ] || cmd='ssh -t {host} tmux attach -t {name}'
+    cmd=${cmd//\{host\}/$host}
+    cmd=${cmd//\{name\}/$name}
+    w="rh-$host-$name"
+    w=${w//[^A-Za-z0-9_-]/_}
+    if ! tm has-session -t "=$w" 2>/dev/null; then
+        tm new-session -d -s "$w" "$cmd" 2>/dev/null || { log "switch: could not start $w"; return 1; }
+    fi
+    printf '%s' "$w"
+}
+
+switch_to() {  # session name, or remote:<host>:<name>: switch the clicking client there
     need_client
+    if [[ $1 == remote:* ]]; then
+        local rest=${1#remote:} w name=""
+        [[ $rest == *:* ]] && name=${rest#*:}
+        if w=$(remote_open "${rest%%:*}" "$name") && [ -n "$w" ]; then
+            note_arrival "$w"
+            tm switch-client -c "$CLIENT" -t "=$w" 2>/dev/null || log "switch: no wrapper $w"
+        else
+            log "switch: remote $1 refused"
+            tm display-message -c "$CLIENT" -d 2500 "retro-hud: cannot open ${1#remote:}" || true
+        fi
+        return 0
+    fi
     note_arrival "$1"
     tm switch-client -c "$CLIENT" -t "=$1" 2>/dev/null || {
         log "switch: no session $1"
@@ -1003,7 +1098,7 @@ case $ACTION in
         need_client
         first=$(sessions_rows | python3 -I -c 'import json,sys
 r = [x for x in json.load(sys.stdin) if x["state"] == "needs" and not x["current"]]
-print(r[0]["name"] if r else "")' 2>/dev/null) || first=""
+print((r[0].get("target") or r[0]["name"]) if r else "")' 2>/dev/null) || first=""
         if [ -n "$first" ]; then
             switch_to "$first"
         else
