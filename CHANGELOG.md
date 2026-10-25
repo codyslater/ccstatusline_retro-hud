@@ -11,9 +11,9 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   counts through a feed: a `<host>.json` per machine under
   `~/.cache/retro-hud/remote/` (`RETRO_HUD_REMOTE_DIR`), written by any
   sync you run. Rows read `⌁ host:name` with the usual state word; a click
-  runs the file's `open` command (default ssh + tmux attach) in a wrapper
-  session here and switches to it; `needs` jumps there too. A feed older
-  than 15 minutes is ignored.
+  runs `RETRO_HUD_REMOTE_OPEN` (default ssh + tmux attach; your config,
+  never the feed) in a wrapper session here and switches to it; `needs`
+  jumps there too. A feed older than 15 minutes is ignored.
 
 ## [v3.1.2] — 2026-10-24
 

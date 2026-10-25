@@ -1007,6 +1007,9 @@ def other_sessions(sid, now):
     return live, needing
 
 
+_FEED_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")   # = the handler's rule
+
+
 def remote_states(now):
     """The states of the sessions in the remote feed: every <host>.json under
     RETRO_HUD_REMOTE_DIR (else <cache>/remote) written in the last
@@ -1031,8 +1034,11 @@ def remote_states(now):
         except OSError:
             continue
         rows = doc.get("sessions") if isinstance(doc, dict) else None
+        seen = set()
         for x in rows or []:
-            if isinstance(x, dict) and isinstance(x.get("name"), str):
+            name = x.get("name") if isinstance(x, dict) else None
+            if isinstance(name, str) and _FEED_NAME_RE.match(name) and name not in seen:
+                seen.add(name)
                 out.append(x.get("state"))
     return out
 

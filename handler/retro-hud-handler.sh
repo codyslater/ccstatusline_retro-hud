@@ -138,13 +138,13 @@ if [ -f "$LOCAL_EXT" ]; then
 fi
 
 # ── settings: environment first, then the config file, then defaults ──
-cfg_models="" cfg_usage_url="" cfg_agent_name="" cfg_cache_dir="" cfg_home_session="" cfg_remote_dir=""
+cfg_models="" cfg_usage_url="" cfg_agent_name="" cfg_cache_dir="" cfg_home_session="" cfg_remote_dir="" cfg_remote_open=""
 if [ -f "$CONFIG" ]; then
     n=0
     while IFS= read -r line || [ -n "$line" ]; do
         n=$((n + 1))
         [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
-        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL|RETRO_HUD_AGENT_NAME|RETRO_HUD_CACHE_DIR|RETRO_HUD_HOME_SESSION|RETRO_HUD_REMOTE_DIR)=(.*)$ ]]; then
+        if [[ $line =~ ^(RETRO_HUD_MODELS|RETRO_HUD_USAGE_URL|RETRO_HUD_AGENT_NAME|RETRO_HUD_CACHE_DIR|RETRO_HUD_HOME_SESSION|RETRO_HUD_REMOTE_DIR|RETRO_HUD_REMOTE_OPEN)=(.*)$ ]]; then
             key=${BASH_REMATCH[1]} val=${BASH_REMATCH[2]}
             if [[ $val =~ ^\"(.*)\"$ || $val =~ ^\'(.*)\'$ ]]; then
                 val=${BASH_REMATCH[1]}
@@ -156,6 +156,7 @@ if [ -f "$CONFIG" ]; then
                 RETRO_HUD_CACHE_DIR) cfg_cache_dir=$val ;;
                 RETRO_HUD_HOME_SESSION) cfg_home_session=$val ;;
                 RETRO_HUD_REMOTE_DIR) cfg_remote_dir=$val ;;
+                RETRO_HUD_REMOTE_OPEN) cfg_remote_open=$val ;;
             esac
         else
             log "config: ignored line $n of $CONFIG"
@@ -351,8 +352,11 @@ presence_cache() {
 # The remote feed: RETRO_HUD_REMOTE_DIR, else <cache>/remote. Every <host>.json
 # there (written by whatever sync you run: ssh, rsync, a cron) lists the Claude
 # sessions on another machine; the session list shows them as ⌁ host:name and a
-# click opens the file's `open` command (default: ssh + tmux attach) in a wrapper
+# click opens RETRO_HUD_REMOTE_OPEN (default: ssh + tmux attach) in a wrapper
 # session here. A file older than 15 minutes is ignored: its sync is gone.
+# The feed is data from another machine: nothing in it is ever run. The open
+# command comes from your own config, and a host or session name is a plain
+# word (letters, digits, . _ @ -, not starting with -).
 remote_dir() {
     local d=${RETRO_HUD_REMOTE_DIR:-$cfg_remote_dir} c
     if [ -z "$d" ]; then
@@ -782,7 +786,7 @@ WORD = {"working": ("working", "#[fg=colour46]"), "yours": ("your turn", "#[fg=c
         "asleep": ("asleep", "#[dim]"), "error": ("error", "#[fg=colour196]"),
         "paused": ("paused", "#[dim]")}
 RANK = {"needs": 0, "yours": 1, "working": 2, "error": 3, "idle": 4, "asleep": 5, "paused": 6}
-PART = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")   # a host or session name in a feed: no `:`
+PART = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")   # a host or session name in a feed: a plain word, no `:`
 FRESH = 15 * 60
 now = time.time()
 seen = {}
@@ -958,23 +962,16 @@ go_back() {
     fi
 }
 
-# remote:<host>:<name> (a row from the remote feed): the feed file's `open`
-# command ({host} and {name} filled in; default ssh + tmux attach) runs in a
-# wrapper session here, rh-<host>-<name>, and the client goes there. A second
-# click finds the wrapper and just switches; when the command ends (detach,
-# a failed ssh) the wrapper closes and tmux puts the client elsewhere.
+# remote:<host>:<name> (a row from the remote feed): RETRO_HUD_REMOTE_OPEN
+# (env or config; {host} and {name} filled in; default ssh + tmux attach) runs
+# in a wrapper session here, rh-<host>-<name>, and the client goes there. A
+# second click finds the wrapper and just switches; when the command ends
+# (detach, a failed ssh) the wrapper closes and tmux puts the client elsewhere.
 remote_open() {  # host name: the wrapper session's name on stdout, or nothing
-    local host=$1 name=$2 d cmd w
-    [[ $host =~ ^[A-Za-z0-9_.@-]{1,64}$ && $name =~ ^[A-Za-z0-9_.@-]{1,64}$ ]] || return 1
-    d=$(remote_dir) || return 1
-    cmd=$(python3 -I -c 'import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-    c = d.get("open") if isinstance(d, dict) else None
-    print(c if isinstance(c, str) and c.strip() and "\n" not in c else "")
-except (OSError, ValueError):
-    print("")' "$d/$host.json" 2>/dev/null) || cmd=""
-    [ -n "$cmd" ] || cmd='ssh -t {host} tmux attach -t {name}'
+    local host=$1 name=$2 cmd w
+    [[ $host =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$ && $name =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$ ]] || return 1
+    cmd=${RETRO_HUD_REMOTE_OPEN:-$cfg_remote_open}
+    [ -n "$cmd" ] || cmd='ssh -t -- {host} tmux attach -t {name}'
     cmd=${cmd//\{host\}/$host}
     cmd=${cmd//\{name\}/$name}
     w="rh-$host-$name"
