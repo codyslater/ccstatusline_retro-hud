@@ -110,7 +110,7 @@ the % is always the token touching its own bar. Each gauge escalates on
 its own, and the pinned label is the last thing row 2 gives up when the
 terminal narrows, so neither number flickers away under you.
 """
-__version__ = "3.2.0"
+__version__ = "3.3.0"
 
 import calendar
 import json
