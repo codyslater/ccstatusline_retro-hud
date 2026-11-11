@@ -4,7 +4,7 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
-## [Unreleased]
+## [v3.4.0] — 2026-11-10
 
 ### Added
 - **One more limit, from a file.** `~/.cache/retro-hud/limit.json`
