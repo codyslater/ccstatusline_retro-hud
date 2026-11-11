@@ -4,6 +4,23 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [Unreleased]
+
+### Added
+- **A named session keeps its creature.** A session you named (`claude
+  --name nova`, `/rename nova`) is seeded by the name, not the session id:
+  every session called `nova` is the same creature and colour, the one
+  `RETRO_HUD_CREATURE_SEED=nova` draws. A pinned seed and the click menu's
+  *reroll* still win. Claude Code's generated title shares the payload
+  field and changes during a session, so only a name with a `custom-title`
+  entry in the transcript counts (found in the tail or the first 16 KB,
+  then remembered in the state file as `named`); unnamed sessions keep
+  their id's creature. `RETRO_HUD_CREATURE_BY_NAME=0` turns it off.
+
+### Changed
+- The creature of a session you had already named changes once, to its
+  name's.
+
 ## [v3.2.0] — 2026-10-28
 
 ### Added

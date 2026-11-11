@@ -137,7 +137,13 @@ Every other body is a mirrored, connected grid with two eyes (holes in
 `tiny`, since a braille cell has one colour), generated from a seed: the
 session id by default (so each session has its own, and keeps it across
 refreshes and restarts), or `RETRO_HUD_CREATURE_SEED` (any integer or
-string) to pin one. Its colour comes from the same seed —
+string) to pin one. A session you named (`claude --name nova`, `/rename
+nova`) is seeded by that name instead, so every session called `nova` is
+the same creature, on any machine, the one `RETRO_HUD_CREATURE_SEED=nova`
+draws. Only a name you gave counts: the title Claude Code writes for an
+unnamed session changes as the session goes on, and the transcript tells
+the two apart (`RETRO_HUD_CREATURE_BY_NAME=0` keeps every session on its
+id). Its colour comes from the same seed —
 $\color{#ff0087}{\textsf{pink}}$, $\color{#00ff00}{\textsf{green}}$,
 $\color{#af5fff}{\textsf{purple}}$ or $\color{#00d7ff}{\textsf{cyan}}$ —
 and `RETRO_HUD_CREATURE_COLOR` pins it (one of those names, `orange`, or a
@@ -230,7 +236,8 @@ scatters into loose dots and reassembles over 10s.
 The gauges still come first, so peripheral vision tells you something's
 hot before you read a number. The agent's state is read from the last
 64 KB of the session transcript: entry type, stop reason, error flag and
-timestamp only, never message text. A missing or unreadable transcript
+timestamp only, never message text (and, for a named session, whether the
+transcript holds a `custom-title` entry with that name). A missing or unreadable transcript
 falls back to the gauge-only creature (calm, agitated or red).
 
 Nothing can be drawn inside Claude Code's input box: the status line owns
@@ -289,7 +296,8 @@ To remember transitions, the HUD keeps a small state file per session at
 `~/.cache/retro-hud/<session_id>.state.json`. It holds the last state and
 bubble, the current mood and when it began (`mood`, `mood_since`: what
 times the entry tics), the creature's family (`creature`, so the click
-menu knows it is on), plus a snapshot of state, since, context %, worst
+menu knows it is on), the name you gave the session (`named`, what seeds
+its creature), plus a snapshot of state, since, context %, worst
 limit % and cost. Other tools may set `"mute_until": <epoch>` in it to
 silence every bubble until then, `"sprite"` to switch the family (or the
 2.x sprite set with the creature off), `"size"` (`tiny`, `big` or `tall`)

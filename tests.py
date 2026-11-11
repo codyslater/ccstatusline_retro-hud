@@ -2461,7 +2461,7 @@ class TestFrameBubble(unittest.TestCase):
 
 _KNOBS = ("RETRO_HUD_PRESENCE", "RETRO_HUD_SPRITE", "RETRO_HUD_AGENT_NAME",
           "RETRO_HUD_QUIPS", "RETRO_HUD_IDLE_MIN", "RETRO_HUD_SLEEP_MIN",
-          "RETRO_HUD_ALIEN")
+          "RETRO_HUD_ALIEN", "RETRO_HUD_CREATURE_BY_NAME")
 
 
 class PresenceCase(unittest.TestCase):
@@ -3429,6 +3429,35 @@ class TestCreatureIdentity(unittest.TestCase):
         self.assertEqual(cs("12", "", ""), 12)              # a string seed in the file
         self.assertEqual(cs(2 ** 40 + 5, "", ""), 5)
 
+    def test_a_given_name_seeds_before_the_session_id(self):
+        cs = sl.creature_seed
+        self.assertEqual(cs(None, "", "sid", "nova"), cs(None, "nova", ""))  # as the env would
+        self.assertEqual(cs(None, "", "other-sid", "nova"), cs(None, "", "sid", "nova"))
+        self.assertNotEqual(cs(None, "", "sid", "nova"), cs(None, "", "sid", "vega"))
+        self.assertEqual(cs(None, "42", "sid", "nova"), 42)     # the env pin wins
+        self.assertEqual(cs(7, "", "sid", "nova"), 7)           # and the state file
+        for junk in ("", "  ", None, 5.5, ["nova"]):
+            self.assertEqual(cs(None, "", "sid", junk), cs(None, "", "sid"), repr(junk))
+
+    def test_given_name_tells_a_name_from_a_generated_title(self):
+        gn = sl.given_name
+        said = [user(NOW - 9), asst(NOW - 2)]
+        custom = {"type": "custom-title", "customTitle": "nova", "sessionId": "s"}
+        ai = {"type": "ai-title", "aiTitle": "Fix the login flow", "sessionId": "s"}
+        self.assertEqual(gn("nova", [custom] + said), "nova")
+        self.assertEqual(gn(" nova ", said + [custom]), "nova")
+        self.assertEqual(gn("Fix the login flow", [ai] + said), "")   # Claude Code's title
+        self.assertEqual(gn("nova", said), "")                        # unproven
+        self.assertEqual(gn("nova", said, "nova"), "nova")            # seen earlier
+        self.assertEqual(gn("vega", said, "nova"), "")
+        self.assertEqual(gn("vega", [custom] + said), "")             # another name's entry
+        self.assertEqual(gn("nova", []), "nova")       # nothing said yet: no title can exist
+        for junk in (None, "", "   ", 7, ["nova"], {"a": 1}):
+            self.assertEqual(gn(junk, [custom]), "", repr(junk))
+        for bad in ({"type": "custom-title"}, {"type": "custom-title", "customTitle": 5},
+                    {"type": "custom-title", "customTitle": ["nova"]}, "x", None):
+            self.assertEqual(gn("nova", [bad] + said), "", repr(bad))
+
     def test_color_from_seed_and_pins(self):
         cols = {sl.creature_color(s) for s in range(64)}
         self.assertEqual(cols, {198, 46, 135, 45})
@@ -4082,6 +4111,143 @@ class TestCreatureHud(CreatureCase):
             steady = sl.pose(3, "yours", None, NOW + el, 60)["canvas"]
             self.assertEqual(cv, steady, el)
         self.assertEqual(self.state_file()["mood"], "working")  # the gesture is not stored
+
+
+class TestCreatureByName(CreatureCase):
+    """A name the user gave the session (--name, /rename) seeds the creature;
+    Claude Code's generated title, which shares the payload field, does not."""
+    NAME = "nova"
+
+    def named(self, name=NAME, sid=None):
+        p = self.payload(MINIMAL, sid)
+        p["session_name"] = name
+        return p
+
+    def seed(self, p, now=NOW):
+        return sl.creature_look(p, sl.presence(p, now, 0, 0, 0, 0, True))["seed"]
+
+    def by(self, name):
+        return sl.creature_seed(None, name, "")
+
+    @staticmethod
+    def title(name):
+        return {"type": "custom-title", "customTitle": name, "sessionId": "s"}
+
+    @staticmethod
+    def ai_title(text):
+        return {"type": "ai-title", "aiTitle": text, "sessionId": "s"}
+
+    def test_same_name_same_creature_across_sessions(self):
+        self.tx(self.title(self.NAME), user(NOW - 9), asst(NOW - 2))
+        a, b = self.named(), self.named(sid="another-session-id")
+        self.assertEqual(self.seed(a), self.by(self.NAME))
+        self.assertEqual(self.seed(b), self.by(self.NAME))
+        self.assertEqual(sl.render(a, 160, NOW)[:2], sl.render(b, 160, NOW)[:2])
+        self.assertNotEqual(self.seed(self.payload()), self.by(self.NAME))  # unnamed: the id
+
+    def test_a_generated_title_keeps_the_session_id_creature(self):
+        text = "Fix the login flow"
+        self.tx(user(NOW - 9), self.ai_title(text), asst(NOW - 2))
+        sid_seed = sl.creature_seed(None, "", self.SID)
+        self.assertEqual(self.seed(self.named(text)), sid_seed)
+        self.tx(user(NOW - 9), self.ai_title("Rework the login flow"), asst(NOW - 2))
+        self.assertEqual(self.seed(self.named("Rework the login flow")), sid_seed)  # a retitle
+        self.assertNotIn("named", self.state_file())
+
+    def test_a_named_session_before_its_first_message(self):
+        # no transcript yet: the gauge-only creature, already the name's
+        p = self.named()
+        self.assertIsNone(sl.presence(p, NOW, 0, 0, 0, 0, True))
+        self.assertEqual(sl.creature_look(p, None)["seed"], self.by(self.NAME))
+        # a payload that names no transcript backs nothing: the id (the demo's look stays)
+        for path in (None, "", 7):
+            p["transcript_path"] = path
+            self.assertEqual(sl.creature_look(p, None)["seed"], sl.creature_seed(None, "", self.SID))
+        self.assertEqual(sl.creature_look(sl.DEMO_DATA, None)["seed"], 0)
+
+    def test_the_name_is_remembered_once_its_entry_scrolls_out(self):
+        self.tx(self.title(self.NAME), user(NOW - 9), asst(NOW - 2))
+        self.assertEqual(self.seed(self.named()), self.by(self.NAME))
+        self.assertEqual(self.state_file()["named"], self.NAME)
+        self.tx(user(NOW - 9), asst(NOW - 2))               # the entry is gone from view
+        self.assertEqual(self.seed(self.named(), NOW + 5), self.by(self.NAME))
+        self.assertEqual(self.state_file()["named"], self.NAME)
+        # another name with nothing to back it: the id again, the memory dropped
+        self.assertEqual(self.seed(self.named("Fix the login flow"), NOW + 9),
+                         sl.creature_seed(None, "", self.SID))
+        self.assertNotIn("named", self.state_file())
+
+    def test_a_rename_gives_the_new_names_creature(self):
+        self.tx(self.title(self.NAME), user(NOW - 9), asst(NOW - 2))
+        self.assertEqual(self.seed(self.named()), self.by(self.NAME))
+        self.tx(self.title(self.NAME), user(NOW - 9), asst(NOW - 2), self.title("vega"))
+        self.assertEqual(self.seed(self.named("vega"), NOW + 5), self.by("vega"))
+        self.assertEqual(self.state_file()["named"], "vega")
+
+    def test_the_name_entry_at_the_top_of_a_long_transcript(self):
+        # --name writes the entry first; far outside the tail, with no
+        # state file yet to remember it, the top of the file still shows it
+        filler = [user(NOW - 900 + i, "x" * 2000) for i in range(60)]   # > the 64 KiB tail
+        self.tx(self.title(self.NAME), *filler)
+        self.assertGreater(os.path.getsize(self.transcript), sl.TAIL_BYTES + sl.HEAD_BYTES)
+        self.assertFalse(sl._has_title(sl.tail_entries(self.transcript)[0], self.NAME))
+        self.assertFalse(os.path.exists(self.path(".state.json")))
+        self.assertEqual(self.seed(self.named()), self.by(self.NAME))
+        os.remove(self.path(".state.json"))
+        self.tx(self.ai_title("Fix the login flow"), *filler)
+        self.assertEqual(self.seed(self.named("Fix the login flow")),
+                         sl.creature_seed(None, "", self.SID))
+        # a first line cut by the head's limit is no entry
+        self.tx(dict(self.title(self.NAME), pad="x" * sl.HEAD_BYTES), *filler)
+        os.remove(self.path(".state.json"))
+        self.assertEqual(self.seed(self.named()), sl.creature_seed(None, "", self.SID))
+
+    def test_presence_off_reads_no_transcript(self):
+        # RETRO_HUD_PRESENCE=0 / RETRO_HUD_ALIEN=0 promise no transcript reads:
+        # a name is then only known from an earlier refresh's state file
+        self.tx(self.title(self.NAME), user(NOW - 9), asst(NOW - 2))
+        for knob in ("RETRO_HUD_PRESENCE", "RETRO_HUD_ALIEN"):
+            os.environ[knob] = "0"
+            real = sl.tail_entries, sl.head_entries
+            sl.tail_entries = sl.head_entries = lambda *a, **k: self.fail("transcript read")
+            try:
+                look = sl.creature_look(self.named(), None)
+                sl.render(self.named(), 160, NOW)
+            finally:
+                sl.tail_entries, sl.head_entries = real
+            self.assertEqual(look["seed"], sl.creature_seed(None, "", self.SID), knob)
+            os.environ.pop(knob)
+
+    def test_the_peeked_state_file_remembers_too(self):
+        os.environ["RETRO_HUD_PRESENCE"] = "0"
+        self.tx(*[user(NOW - 900 + i, "x" * 2000) for i in range(60)])
+        self.put_state(named=self.NAME)
+        self.assertEqual(sl.creature_look(self.named(), None)["seed"], self.by(self.NAME))
+        self.assertEqual(self.state_file(), {"named": self.NAME})         # only peeked at
+
+    def test_off_and_the_pins_that_win(self):
+        self.tx(self.title(self.NAME), user(NOW - 9), asst(NOW - 2))
+        sid_seed = sl.creature_seed(None, "", self.SID)
+        os.environ["RETRO_HUD_CREATURE_BY_NAME"] = "0"
+        self.assertEqual(self.seed(self.named()), sid_seed)
+        self.assertNotIn("named", self.state_file())
+        os.environ.pop("RETRO_HUD_CREATURE_BY_NAME")
+        os.environ["RETRO_HUD_CREATURE_SEED"] = "7"
+        self.assertEqual(self.seed(self.named()), 7)
+        os.environ.pop("RETRO_HUD_CREATURE_SEED")
+        self.put_state(seed=11)                                  # the click menu's reroll
+        self.assertEqual(self.seed(self.named()), 11)
+
+    def test_junk_names_and_transcripts_never_cost_the_bar(self):
+        with open(self.transcript, "wb") as f:
+            f.write(b'{"type":"custom-title","customTitle":"nova"\n\xff\xfe junk\n[1]\n')
+            f.write(json.dumps(user(NOW - 9)).encode() + b"\n")
+        for name in (7, ["nova"], {"a": 1}, None, "", "nova", "n" * 5000):
+            p = self.named(name)
+            self.assertEqual(self.seed(p), sl.creature_seed(None, "", self.SID), repr(name)[:20])
+            for cols in (60, 120):
+                for row in sl.render(p, cols, NOW):
+                    self.assertLessEqual(sl.vislen(row), cols)
 
 
 class TestSessionsSegment(PresenceCase):

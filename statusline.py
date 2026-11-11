@@ -55,7 +55,12 @@ Env toggles:
     RETRO_HUD_EXCURSIONS=0       keep the creature on its rule: no trips
                                  over the rest of the bar (tiny and big)
     RETRO_HUD_CREATURE_SEED=<s>  pin the creature's look (integer or any
-                                 string; default: the session id)
+                                 string; default: the session's name if you
+                                 gave it one, else the session id)
+    RETRO_HUD_CREATURE_BY_NAME=0 seed from the session id even when the
+                                 session has a name (default 1: sessions
+                                 you give the same --name / /rename share
+                                 one creature)
     RETRO_HUD_CREATURE_COLOR=<c> pin its colour: pink, green, purple, cyan,
                                  orange, a 256-colour index, or mood (its
                                  own seeded colour, turning yellow when it
@@ -80,7 +85,8 @@ Agent presence: the creature on the top rule (a seeded pixel monster in
 braille or half blocks that wanders, blinks, breathes and hops on its own,
 frame = now // RETRO_HUD_TICK_S) follows the session's agent,
 read from a bounded tail of the transcript (entry type, stop reason,
-error flag and timestamp only; never message text) and, when
+error flag and timestamp only; never message text; a `custom-title`
+entry's name is compared with the session's) and, when
 `install.sh --hooks` was run, from presence-hook.sh's log. It hustles
 while the agent works, waves when the turn is yours, beckons at a
 permission prompt, flinches at a burst of tool errors, then dozes and
@@ -622,8 +628,11 @@ def num(v, default=0):
 
 # ── agent presence: what the session's agent is doing ──
 # Only entry type, stop reason, error flag and timestamp are read — never
-# message text, beyond a 40-char prefix test for harness markers.
+# message text, beyond a 40-char prefix test for harness markers. A
+# `custom-title` entry's name is compared with the payload's session_name
+# (given_name), nothing more.
 TAIL_BYTES = 64 * 1024    # transcript tail read on every refresh
+HEAD_BYTES = 16 * 1024    # transcript head, read only to find a --name entry
 TAIL_MAX = 1024 * 1024    # widened read when one huge line hides every message
 IDLE_S = 10 * 60          # "yours" this long → idle
 SLEEP_S = 60 * 60         # "yours" this long → asleep
@@ -679,6 +688,76 @@ def tail_entries(path, limit=TAIL_BYTES):
                 limit = TAIL_MAX
     except (OSError, TypeError, ValueError):
         return [], 0
+
+
+def head_entries(path, limit=HEAD_BYTES):
+    """The JSONL entries in the first `limit` bytes of a transcript (a line
+    cut by the limit is dropped); [] when it can't be read."""
+    try:
+        with open(path, "rb") as f:
+            buf = f.read(limit + 1)
+    except (OSError, TypeError, ValueError):
+        return []
+    lines = buf.split(b"\n")
+    if len(buf) > limit:
+        lines = lines[:-1]
+    entries = []
+    for line in lines:
+        try:
+            e = json.loads(line.decode("utf-8", "replace")) if line.strip() else None
+        except ValueError:
+            continue
+        if isinstance(e, dict):
+            entries.append(e)
+    return entries
+
+
+def _has_title(entries, name):
+    for e in entries:
+        if isinstance(e, dict) and e.get("type") == "custom-title":
+            t = e.get("customTitle")
+            if isinstance(t, str) and t.strip() == name:
+                return True
+    return False
+
+
+def given_name(name, entries, remembered=None, path=None):
+    """`name` (the payload's session_name, stripped) when the user gave it
+    with --name or /rename, else "".
+
+    The payload field also carries Claude Code's generated title, which
+    changes as a session goes on, so the name must be backed: by a
+    `custom-title` entry for it among `entries` (the transcript's tail) or
+    at the top of the transcript at `path` (where --name writes it), or by
+    `remembered` (the state file's `named`: it was backed on an earlier
+    refresh). With no entries at all nothing has been said yet, so no
+    title can have been generated: the name is the user's. `entries`
+    None means the transcript is not to be read (presence is off): only
+    `remembered` backs a name then."""
+    if not isinstance(name, str) or not name.strip():
+        return ""
+    name = name.strip()
+    if remembered == name:
+        return name
+    if entries is None:
+        return ""
+    if not entries or _has_title(entries, name):
+        return name
+    if isinstance(path, str) and path and _has_title(head_entries(path), name):
+        return name
+    return ""
+
+
+def session_given_name(data, entries, remembered=None):
+    """given_name() for this payload; "" with RETRO_HUD_CREATURE_BY_NAME=0.
+    A payload that names no transcript has nothing to back a name with
+    (the --demo, a hand-made payload): only a remembered one counts."""
+    if os.environ.get("RETRO_HUD_CREATURE_BY_NAME", "1").strip() == "0":
+        return ""
+    path = data.get("transcript_path")
+    if not (isinstance(path, str) and path):
+        entries = path = None
+    return given_name(data.get("session_name"), entries, remembered, path)
 
 
 def _classify(e):
@@ -1069,13 +1148,15 @@ def card_facts(data):
 
 def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
     """Agent presence for this refresh: {"mood", "bubble", "since",
-    "sprite", "mood_since", "seed", "icon"}, or None for the plain gauge
-    alien (presence off, or the agent's state is unknown). Never raises;
-    any IO failure degrades to no bubble.
+    "sprite", "mood_since", "seed", "icon", "named"}, or None for the
+    plain gauge alien (presence off, or the agent's state is unknown).
+    Never raises; any IO failure degrades to no bubble.
 
     `mood_since` is when the current mood began, kept in the state file
     (None when it can't be written); `seed` is the state file's raw
-    `seed`. With `creature`, `sprite` may also name a creature family."""
+    `seed`; `named` is the session's name when the user gave it
+    (given_name; the state file keeps it as `named`), else "". With
+    `creature`, `sprite` may also name a creature family."""
     if os.environ.get("RETRO_HUD_PRESENCE", "1") == "0":
         return None
     idle_s = (num(os.environ.get("RETRO_HUD_IDLE_MIN")) or IDLE_S // 60) * 60
@@ -1098,12 +1179,15 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
     wave_since = mood_since = seed = None
     mood = pick_mood(gauge_pct, state)
     d = cache_dir() if sid else ""
-    if d:
+    if not d:
+        named = session_given_name(data, entries)
+    else:
         sp = os.path.join(d, sid + ".state.json")
         prev = _read_json(sp)
         if prev.get("sprite") in SPRITES or (creature and prev.get("sprite") in FAMILIES):
             sprite = prev["sprite"]
         seed = prev.get("seed")
+        named = session_given_name(data, entries, prev.get("named"))
         snap = {"state": state, "since": since, "ctx_pct": ctx_pct,
                 "limit_pct": limit_pct, "cost": cost}
         snap.update(card_facts(data))
@@ -1130,6 +1214,10 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
             rec["creature"] = creature_family(sprite)
         else:
             rec.pop("creature", None)
+        if named:  # its transcript entry scrolls out of the tail; this stays
+            rec["named"] = named
+        else:
+            rec.pop("named", None)
         if now - (_num_or_none(prev.get("last_prune")) or 0) >= PRUNE_EVERY_S:
             _prune(d, now, sid + ".")
             rec["last_prune"] = now
@@ -1142,7 +1230,7 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
         # and it is not a mood change either: arms up at once, no scatter
         mood, since, mood_since = "yours", wave_since, wave_since - SCATTER_S
     return {"mood": mood, "bubble": bubble, "since": since, "sprite": sprite,
-            "mood_since": mood_since, "seed": seed, "icon": icon}
+            "mood_since": mood_since, "seed": seed, "icon": icon, "named": named}
 
 
 def _map_pane(d, sid):
@@ -1218,12 +1306,14 @@ def _seed_of(v):
     return None
 
 
-def creature_seed(state=None, env="", sid=""):
+def creature_seed(state=None, env="", sid="", name=""):
     """The creature's seed: the state file's `seed`, else
-    RETRO_HUD_CREATURE_SEED, else the session id, else 0. Integers (or
-    integer strings) are taken as they are, other strings hashed with
-    CRC-32, so a seed means the same creature on every Python."""
-    for v in (state, env, sid):
+    RETRO_HUD_CREATURE_SEED, else the name the user gave the session
+    (given_name), else the session id, else 0. Integers (or integer
+    strings) are taken as they are, other strings hashed with CRC-32, so
+    a seed means the same creature on every Python, and a session named
+    `nova` looks like RETRO_HUD_CREATURE_SEED=nova."""
+    for v in (state, env, name, sid):
         s = _seed_of(v)
         if s is not None:
             return s
@@ -2501,12 +2591,13 @@ def _frame_creature(row, cols, frame_on, alien_pct, now, pres, look, action=None
 
 def creature_look(data, pres):
     """{"seed", "family", "color"} for this session. The state file's
-    `seed` / `sprite` win over RETRO_HUD_CREATURE_SEED / RETRO_HUD_SPRITE;
-    without presence the state file is only peeked at, never written."""
+    `seed` / `sprite` win over RETRO_HUD_CREATURE_SEED / RETRO_HUD_SPRITE,
+    and a name the user gave the session seeds before its id; without
+    presence the state file is only peeked at, never written."""
     sid = data.get("session_id")
     sid = sid if isinstance(sid, str) and _SID_RE.fullmatch(sid) else ""
     if pres is not None:
-        st_seed, sprite = pres.get("seed"), pres.get("sprite")
+        st_seed, sprite, named = pres.get("seed"), pres.get("sprite"), pres.get("named")
     else:
         prev = {}
         d = cache_dir(create=False) if sid else ""
@@ -2515,7 +2606,13 @@ def creature_look(data, pres):
         st_seed, sprite = prev.get("seed"), prev.get("sprite")
         if sprite not in SPRITES and sprite not in FAMILIES:
             sprite = os.environ.get("RETRO_HUD_SPRITE")
-    seed = creature_seed(st_seed, os.environ.get("RETRO_HUD_CREATURE_SEED", ""), sid)
+        entries = None  # presence off: no transcript reads, as documented
+        if (os.environ.get("RETRO_HUD_ALIEN", "1") != "0"
+                and os.environ.get("RETRO_HUD_PRESENCE", "1") != "0"):
+            path = data.get("transcript_path")
+            entries = tail_entries(path)[0] if isinstance(path, str) and path else []
+        named = session_given_name(data, entries, prev.get("named"))
+    seed = creature_seed(st_seed, os.environ.get("RETRO_HUD_CREATURE_SEED", ""), sid, named)
     # color None: the size's own default (seeded, or the tiny alien's green)
     return {"seed": seed, "family": creature_family(sprite),
             "color": pinned_color(os.environ.get("RETRO_HUD_CREATURE_COLOR", ""))}
