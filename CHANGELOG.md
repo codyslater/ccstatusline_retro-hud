@@ -26,6 +26,18 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
   the last reading until it resets and empty for five hours after. With
   presence off there is no state file, and the gauge follows the payload.
 
+### Fixed
+- **Clicks reach the tmux server the binding runs in.** A link with no
+  usable socket (a bare one from a key binding such as `prefix N`, a bar
+  drawn on another machine) went to the default server, so on a tmux
+  started with `-L` or `-S` the session list, `⌂` and `↩` did nothing.
+  The handler now takes the socket tmux gives its job in `$TMUX`; a
+  link's own socket still wins.
+- **Two remote sessions never share a wrapper.** `lab-dev` + `web` and
+  `lab` + `dev-web` both spell `rh-lab-dev-web`, so the second click landed
+  in the first's session. A wrapper records its host and name
+  (`@retro_hud_remote`), and another pair gets a wrapper named apart.
+
 ## [v3.3.0] — 2026-11-10
 
 ### Added

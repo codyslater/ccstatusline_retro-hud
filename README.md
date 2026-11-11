@@ -454,7 +454,8 @@ you already run (an `ssh` in a cron, `rsync`, a mount):
 age. The rows read `⌁ lab:train   needs you 2m`, count in `▣`/`⚑`, and a
 click runs `ssh -t -- lab "tmux attach -t '=train'"` (the `=`: that exact
 session, never one whose name merely starts so) in a wrapper tmux session
-here (`rh-lab-train`) and switches to it; when ssh ends the wrapper
+here (`rh-lab-train`; a second host and name that spell the same wrapper
+get one with a number after it) and switches to it; when ssh ends the wrapper
 closes. Another way in goes in your own config, never in the feed
 (`RETRO_HUD_REMOTE_OPEN='mosh {host} -- tmux a -t {name}'` in
 `~/.config/retro-hud/env`): the feed is data from another machine, and
@@ -546,7 +547,10 @@ Inside the right-click binding the handler also receives
 active-pane check use) and `RETRO_HUD_MENU_FILE` (an absolute `.tmux`
 path; the handler removes it, writes a menu action's line there, and
 detaches the diff popup so the binding never waits). Both are validated
-and ignored when malformed.
+and ignored when malformed. tmux also hands the binding's job its own
+socket in `$TMUX`: a link that names no usable socket (a bare one from a
+key binding, a bar drawn on another machine) goes to that server, so the
+session list, `⌂` and `↩` work on a tmux started with `-L` or `-S` too.
 
 The reference handler treats every URL as untrusted — any program can
 print a link: it accepts only the whitelist above, validates each value,

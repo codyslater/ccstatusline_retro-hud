@@ -50,6 +50,12 @@
 # and `exit`, otherwise the built-in actions below run.
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# tmux hands a job it runs (the click binding, a menu item) its own socket in
+# $TMUX. Keep it as the server to fall back on when a link names none that is
+# usable here: a bare link from a key binding, a bar drawn on another machine.
+ENV_SOCK=${TMUX:-}
+ENV_SOCK=${ENV_SOCK%%,*}
+[[ $ENV_SOCK =~ ^/[A-Za-z0-9._/-]+$ ]] && [ -S "$ENV_SOCK" ] || ENV_SOCK=""
 unset TMUX
 
 LOG_DIR="$HOME/.cache/retro-hud"
@@ -574,6 +580,8 @@ if [ "${1-}" = "do" ]; then
         [ $# -ge 2 ] && safe_path "$2" && [ -S "$2" ] || reject "do: bad socket"
         SOCK=$2
         shift 2
+    else
+        SOCK=$ENV_SOCK
     fi
     [ $# -ge 2 ] && [[ $2 =~ ^%[0-9]+$ ]] || reject "do: $(printf '%q ' "$@")"
     verb=$1 pane=$2
@@ -649,10 +657,11 @@ if [ "$has_sock" = 1 ]; then
         # session) names that machine's socket. An action that targets no
         # pane is as good without one: the tmux server here, as for a bare link.
         [ "$need_pane" = 0 ] || reject "$ACTION: bad sock $(printf '%q' "$SOCK")"
-        log "$ACTION: sock $SOCK is not a socket here; using the default server"
+        log "$ACTION: sock $SOCK is not a socket here; using the tmux server here"
         SOCK="" has_sock=0
     fi
 fi
+[ -n "$SOCK" ] || SOCK=$ENV_SOCK   # no socket in the link: the server this runs in, else the default one
 if [ -n "$CUR" ]; then
     valid_level "$CUR" || reject "$ACTION: bad cur $(printf '%q' "$CUR")"
 fi
@@ -976,7 +985,7 @@ go_back() {
 # second click finds the wrapper and just switches; when the command ends
 # (detach, a failed ssh) the wrapper closes and tmux puts the client elsewhere.
 remote_open() {  # host name: the wrapper session's name on stdout, or nothing
-    local host=$1 name=$2 cmd w
+    local host=$1 name=$2 cmd w tgt have=0
     [[ $host =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$ && $name =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$ ]] || return 1
     cmd=${RETRO_HUD_REMOTE_OPEN:-$cfg_remote_open}
     # the default asks for the exact name (=): a bare -t would prefix-match and
@@ -986,8 +995,19 @@ remote_open() {  # host name: the wrapper session's name on stdout, or nothing
     cmd=${cmd//\{name\}/$name}
     w="rh-$host-$name"
     w=${w//[^A-Za-z0-9_-]/_}
-    if ! tm has-session -t "=$w" 2>/dev/null; then
+    # Two pairs can spell one wrapper name (lab-dev + web, lab + dev-web): a
+    # wrapper records whose it is, and another pair gets one named apart.
+    if tm has-session -t "=$w" 2>/dev/null; then
+        have=1
+        tgt=$(tm show-options -qv -t "=$w:" @retro_hud_remote 2>/dev/null) || tgt=""
+        if [ -n "$tgt" ] && [ "$tgt" != "$host:$name" ]; then
+            w+="-$(printf '%s' "$host:$name" | cksum | cut -d' ' -f1)"
+            tm has-session -t "=$w" 2>/dev/null || have=0
+        fi
+    fi
+    if [ "$have" = 0 ]; then
         tm new-session -d -s "$w" "$cmd" 2>/dev/null || { log "switch: could not start $w"; return 1; }
+        tm set-option -t "=$w:" @retro_hud_remote "$host:$name" 2>/dev/null || true
     fi
     printf '%s' "$w"
 }

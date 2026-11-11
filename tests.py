@@ -816,6 +816,8 @@ elif cmd[:1] in (["display"], ["display-message"]) and "-p" in cmd:
               "#{pane_current_path}": os.environ.get("FAKE_TMUX_PANE_PATH", ""),
               "#{pane_id}": os.environ.get("FAKE_TMUX_ACTIVE_PANE", "%7")}
     sys.stdout.write(answer.get(cmd[-1], "") + "\n")
+elif cmd[:1] == ["show-options"] and cmd[-1] == "@retro_hud_remote":   # a wrapper session's host:name
+    sys.stdout.write(os.environ.get("FAKE_TMUX_WRAPPER_TARGET", "") + "\n")
 elif cmd[:1] == ["show-options"]:
     sys.stdout.write(os.environ.get("FAKE_TMUX_FEATURES", "") + "\n")
 elif cmd[:1] == ["has-session"]:                       # only the sessions FAKE_TMUX_SESSIONS names exist
@@ -1836,6 +1838,34 @@ class TestHandlerSessions(TestHandlerAgent):
         self.run_handler("retro-hud://switch?to=me@work")           # a local session named so
         self.assertEqual(self.tmux_calls("switch-client")[-1], ["switch-client", "-c", "/dev/pts/3", "-t", "=me@work"])
 
+    def test_two_remote_sessions_never_share_a_wrapper(self):
+        # lab-dev + web and lab + dev-web both spell rh-lab-dev-web: a new wrapper
+        # records its host:name, and a click for another pair gets its own
+        self.run_handler("retro-hud://switch?to=remote:lab-dev:web")
+        self.assertEqual(self.tmux_calls("set-option"),
+                         [["set-option", "-t", "=rh-lab-dev-web:", "@retro_hud_remote", "lab-dev:web"]])
+        self.assertEqual(self.tmux_calls("switch-client")[-1][-1], "=rh-lab-dev-web")
+        # the same pair again: the wrapper is its own
+        self.run_handler("retro-hud://switch?to=remote:lab-dev:web", FAKE_TMUX_SESSIONS="rh-lab-dev-web",
+                         FAKE_TMUX_WRAPPER_TARGET="lab-dev:web")
+        self.assertEqual(len(self.tmux_calls("new-session")), 1)
+        self.assertEqual(self.tmux_calls("switch-client")[-1][-1], "=rh-lab-dev-web")
+        # the other pair: a wrapper of its own, named apart
+        self.run_handler("retro-hud://switch?to=remote:lab:dev-web", FAKE_TMUX_SESSIONS="rh-lab-dev-web",
+                         FAKE_TMUX_WRAPPER_TARGET="lab-dev:web")
+        new = self.tmux_calls("new-session")
+        self.assertEqual(len(new), 2)
+        other = new[-1][3]
+        self.assertRegex(other, r"^rh-lab-dev-web-[0-9]+$")
+        self.assertEqual(new[-1][-1], "ssh -t -- lab \"tmux attach -t '=dev-web'\"")
+        self.assertEqual(self.tmux_calls("set-option")[-1],
+                         ["set-option", "-t", "=" + other + ":", "@retro_hud_remote", "lab:dev-web"])
+        self.assertEqual(self.tmux_calls("switch-client")[-1][-1], "=" + other)
+        # a wrapper from before the record (no option): taken as its own, as it always was
+        self.run_handler("retro-hud://switch?to=remote:lab:dev-web", FAKE_TMUX_SESSIONS="rh-lab-dev-web")
+        self.assertEqual(len(self.tmux_calls("new-session")), 2)
+        self.assertEqual(self.tmux_calls("switch-client")[-1][-1], "=rh-lab-dev-web")
+
     def test_needs_jumps_to_a_remote_session_when_only_it_needs_you(self):
         self.feed("lab", [{"name": "dev_x", "state": "needs", "since": time.time() - 5}])
         self.run_handler("retro-hud://needs", FAKE_TMUX_PANES="work\t%7\tclaude\t1\n", FAKE_TMUX_CLIENT_SESSION="work")
@@ -1906,6 +1936,54 @@ class TestHandlerHomeBack(TestHandlerAgent):
         self.run_handler("retro-hud://cost" + far)
         self.run_handler("retro-hud://card" + far)
         self.assertEqual(len(self.tmux_calls()), n)
+
+    def test_a_bare_link_reaches_the_tmux_server_the_binding_runs_in(self):
+        # tmux hands a run-shell job its own socket in $TMUX: a link with no
+        # usable socket (prefix N's bare link, a far bar's) goes to that server
+        import socket
+        path = os.path.join(self.tmp, "srv")
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(path)
+        try:
+            tmux_env = path + ",4242,0"
+            self.run_handler("retro-hud://home", FAKE_TMUX_CLIENT_SESSION="work", TMUX=tmux_env)
+            raw = self.log("tmux")
+            self.assertTrue(raw)
+            for argv in raw:
+                self.assertEqual(argv[:2], ["-S", path], argv)
+            n = len(raw)
+            self.run_handler("retro-hud://back?pane=%2512&sock=/tmp/tmux-4242/default",
+                             FAKE_TMUX_CLIENT_SESSION="home", TMUX=tmux_env)
+            raw = self.log("tmux")
+            self.assertGreater(len(raw), n)
+            for argv in raw[n:]:
+                self.assertEqual(argv[:2], ["-S", path], argv)
+            # the menu's items carry it on, and the internal form falls back the same way
+            self.run_handler(self.url("sessions"), FAKE_TMUX_PANES="work\t%7\tclaude\t1\n", TMUX=tmux_env,
+                             FAKE_TMUX_CLIENT_SESSION="other")
+            self.assertIn("switch?to=work&sock=" + path, " ".join(self.tmux_calls("display-menu")[-1]))
+            n = len(self.log("tmux"))
+            self.run_handler("do", "send", "%7", "cost", TMUX=tmux_env)
+            for argv in self.log("tmux")[n:]:
+                self.assertEqual(argv[:2], ["-S", path], argv)
+            # a link's own good socket still wins
+            other = os.path.join(self.tmp, "srv2")
+            s2 = socket.socket(socket.AF_UNIX)
+            s2.bind(other)
+            try:
+                n = len(self.log("tmux"))
+                self.run_handler("retro-hud://home?sock=" + other, FAKE_TMUX_CLIENT_SESSION="work", TMUX=tmux_env)
+                for argv in self.log("tmux")[n:]:
+                    self.assertEqual(argv[:2], ["-S", other], argv)
+            finally:
+                s2.close()
+        finally:
+            s.close()
+        # a $TMUX that names no plain socket path is ignored
+        for bad in ("/no/such/socket,1,0", "relative,1,0", "/tmp/a b,1,0", ",1,0", self.work + ",1,0"):
+            n = len(self.log("tmux"))
+            self.run_handler("retro-hud://home", FAKE_TMUX_CLIENT_SESSION="work", TMUX=bad)
+            self.assertFalse([c for c in self.log("tmux")[n:] if c[:1] == ["-S"]], bad)
 
     def test_home_session_name_is_checked(self):
         self.run_handler("retro-hud://home", RETRO_HUD_HOME_SESSION="a b")
