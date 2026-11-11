@@ -23,6 +23,12 @@ Env toggles:
                                  cycle (alternate % and time-to-reset every
                                  30s, every 10s in the red zone), pct, time,
                                  or both
+    RETRO_HUD_LIMIT_FILE=<path>  one more limit for the gauge, from a file
+                                 your own tooling writes (default
+                                 <cache>/limit.json): {"label": "fable",
+                                 "used_percentage": 71, "resets_at": <epoch>}.
+                                 It takes the 5h half when the payload has
+                                 no 5h window; ignored when older than 1h
     RETRO_HUD_ALIEN=0            ground the creature (or alien) that walks
                                  the top rule (a tall head line stays, blank)
     RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
@@ -107,7 +113,8 @@ is pinned by RETRO_HUD_RL_MODE); the moment it reaches the amber zone it
 stops rotating for good and pins both numbers — "20h30m · 77%" on the
 five-hour side, "77% · 20h30m" on the seven-day side, mirrored so that
 the % is always the token touching its own bar. Each gauge escalates on
-its own, and the pinned label is the last thing row 2 gives up when the
+its own, a window the payload does not carry is not drawn (the other
+takes the whole gauge; with neither there is none), and the pinned label is the last thing row 2 gives up when the
 terminal narrows, so neither number flickers away under you.
 """
 __version__ = "3.3.0"
@@ -576,7 +583,7 @@ def value_color(pct):
     return NEON_RED
 
 
-def rate_mirror(pct_5h, pct_7d, len_5h, len_7d, lbl_5h, lbl_7d):
+def rate_mirror(pct_5h, pct_7d, len_5h, len_7d, lbl_5h, lbl_7d, name_5h=""):
     """5h gauge fills right-to-left, 7d left-to-right, meeting at center.
 
     Bar lengths are per-side: in cycle mode each gauge stretches to absorb
@@ -606,7 +613,37 @@ def rate_mirror(pct_5h, pct_7d, len_5h, len_7d, lbl_5h, lbl_7d):
         right += "{}{}{}{}".format(bg_7d, fc_7d, _FRAC[frac], R)
     right += "{}{}{} {}{}{}".format(bg_7d, " " * empty, R, fc_7d, lbl_7d, R)
 
+    if name_5h:  # a limit from RETRO_HUD_LIMIT_FILE in the 5h half: say whose it is
+        left = "{}{}{} {}".format(DIM, name_5h, R, left)
     return "{}{}|{}{}".format(left, DIM, R, right)
+
+
+def rate_single(pct, length, lbl, fc_calm, ec, name=""):
+    """One window on its own: a left-to-right bar `length` cells long in
+    that window's colours, its label after it, `name` (a limit file's
+    label) before it."""
+    fc = value_color(pct) if pct >= WARN_PCT else fc_calm
+    bg = ec.replace("38;5;", "48;5;")
+    units = clamp(pct, 0, 100) * length * 8 // 100
+    full, frac = units // 8, units % 8
+    empty = length - full - (1 if frac else 0)
+    out = "{}{}{} ".format(DIM, name, R) if name else ""
+    out += "{}{}{}".format(fc, _FULL * full, R)
+    if frac:
+        out += "{}{}{}{}".format(bg, fc, _FRAC[frac], R)
+    return out + "{}{}{} {}{}{}".format(bg, " " * empty, R, fc, lbl, R)
+
+
+def rate_window(w):
+    """(used %, resets_at or 0) of a rate-limit window in the payload, or
+    None when the payload does not carry it (each window may be absent on
+    its own, and Claude Code drops one once it has reset)."""
+    if not isinstance(w, dict):
+        return None
+    pct = w.get("used_percentage")
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not -1e6 < pct < 1e6:
+        return None  # no number (or NaN): not a window; an out-of-range one is drawn clamped
+    return int(pct), num(w.get("resets_at"))
 
 
 # ── payload access ──
@@ -1086,6 +1123,73 @@ def other_sessions(sid, now):
     return live, needing
 
 
+RL5_KEEP_S = 5 * 3600  # a 5h window that has reset keeps its (empty) half this long
+
+
+def _kept_5h(m, now):
+    """A state file's `rl5` ({"pct", "reset"}) as a window to draw: the
+    reading itself until it resets, then an empty one for RL5_KEEP_S, then
+    None (as for anything malformed)."""
+    if not isinstance(m, dict):
+        return None
+    pct, reset = _num_or_none(m.get("pct")), _num_or_none(m.get("reset"))
+    if pct is None or reset is None or not -1e6 < pct < 1e6 or not 0 < reset < 1e12:
+        return None
+    if now < reset:
+        return int(pct), int(reset)
+    return (0, 0) if now < reset + RL5_KEEP_S else None
+
+
+def remembered_5h(data, now):
+    """The session's last 5h window, for a refresh whose payload has none.
+    Claude Code leaves a still-open window out of some refreshes and drops
+    it once it resets; without this the mirrored gauge would flip to the
+    one-window layout and back. From the state file's `rl5` (presence()
+    keeps it), so with no state file the gauge just follows the payload."""
+    sid = data.get("session_id")
+    d = cache_dir(create=False) if isinstance(sid, str) and _SID_RE.fullmatch(sid) else ""
+    if not d:
+        return None
+    return _kept_5h(_read_json(os.path.join(d, sid + ".state.json")).get("rl5"), now)
+
+
+LIMIT_FRESH_S = 3600   # a limit file older than this is ignored: its writer is gone
+_LIMIT_LABEL_JUNK = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def limit_file(now):
+    """One more limit for the gauge, from a file your own tooling writes:
+    RETRO_HUD_LIMIT_FILE (an absolute path), else <cache>/limit.json, as
+    {"label": "fable", "used_percentage": 71, "resets_at": <epoch>}.
+    Returns {"label", "pct", "reset"}, or None without a usable file:
+    missing, older than LIMIT_FRESH_S, no number in it, or a window that
+    has already reset. The label is cut to 8 plain characters ("extra"
+    when it has none). Nothing in the file is run, and nothing is fetched:
+    where the number comes from is the writer's business."""
+    path = os.environ.get("RETRO_HUD_LIMIT_FILE", "")
+    if not path:
+        c = cache_dir(create=False)
+        path = os.path.join(c, "limit.json") if c else ""
+    if not os.path.isabs(path):
+        return None
+    try:
+        if now - os.path.getmtime(path) > LIMIT_FRESH_S:
+            return None
+    except OSError:
+        return None
+    doc = _read_json(path)
+    pct = doc.get("used_percentage")
+    if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not 0 <= pct < 1e6:
+        return None
+    reset = doc.get("resets_at")
+    reset = int(reset) if _num_or_none(reset) is not None and 0 < reset < 1e12 else 0
+    if reset and reset <= now:
+        return None
+    label = doc.get("label")
+    label = _LIMIT_LABEL_JUNK.sub("", label)[:8] if isinstance(label, str) else ""
+    return {"label": label or "extra", "pct": int(pct), "reset": reset}
+
+
 _FEED_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")   # = the handler's rule
 
 
@@ -1218,6 +1322,11 @@ def presence(data, now, gauge_pct, ctx_pct, limit_pct, cost, creature=False):
             rec["named"] = named
         else:
             rec.pop("named", None)
+        w5 = rate_window(dig(data, "rate_limits", "five_hour"))
+        if w5 and w5[1] > now:  # for the refreshes that leave it out (remembered_5h)
+            rec["rl5"] = {"pct": w5[0], "reset": w5[1]}
+        elif _kept_5h(rec.get("rl5"), now) is None:
+            rec.pop("rl5", None)
         if now - (_num_or_none(prev.get("last_prune")) or 0) >= PRUNE_EVERY_S:
             _prune(d, now, sid + ".")
             rec["last_prune"] = now
@@ -2691,11 +2800,21 @@ def render(data, cols, now, _edges=True):
     agent_name = str(dig(data, "agent", "name") or "")
     worktree = str(dig(data, "worktree", "name") or dig(data, "workspace", "git_worktree") or "")
 
-    has_rl = isinstance(data.get("rate_limits"), dict)
-    rl5_pct = num(dig(data, "rate_limits", "five_hour", "used_percentage"))
-    rl7_pct = num(dig(data, "rate_limits", "seven_day", "used_percentage"))
-    rl5_reset = num(dig(data, "rate_limits", "five_hour", "resets_at"))
-    rl7_reset = num(dig(data, "rate_limits", "seven_day", "resets_at"))
+    # Each window may be absent on its own (an account with no 5h limit sends
+    # only seven_day): only what is there is drawn, except that a 5h window
+    # this session has shown keeps its half through the refreshes that leave
+    # it out. The 5h half, when free, takes the limit your own tooling wrote
+    # to RETRO_HUD_LIMIT_FILE.
+    w5 = rate_window(dig(data, "rate_limits", "five_hour")) or remembered_5h(data, now)
+    w7 = rate_window(dig(data, "rate_limits", "seven_day"))
+    rl5_name = ""
+    if not w5:
+        extra = limit_file(now)
+        if extra:
+            w5, rl5_name = (extra["pct"], extra["reset"]), extra["label"]
+    has_rl = bool(w5 or w7)
+    rl5_pct, rl5_reset = w5 or (0, 0)
+    rl7_pct, rl7_reset = w7 or (0, 0)
     rl5_left = max(rl5_reset - now, 0)
     rl7_left = max(rl7_reset - now, 0)
 
@@ -2862,10 +2981,20 @@ def render(data, cols, now, _edges=True):
         return shown, max(vwidth(other) - vwidth(shown), 0)
 
     def rl_seg(rich):
-        l5, flex5 = rl_label(rl5_pct, rl5_left, rl5_reset, rich, mirror=True)
-        l7, flex7 = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
-        return action("usage", rate_mirror(rl5_pct, rl7_pct, rl_len + flex5,
-                                           rl_len + flex7, l5, l7))
+        name = rl5_name if rich else ""  # the narrowest rows keep the numbers, not the name
+        if w5 and w7:
+            l5, flex5 = rl_label(rl5_pct, rl5_left, rl5_reset, rich, mirror=True)
+            l7, flex7 = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
+            return action("usage", rate_mirror(rl5_pct, rl7_pct, rl_len + flex5,
+                                               rl_len + flex7, l5, l7, name))
+        # one window: the whole gauge (both halves and the divider's cell)
+        if w5:
+            lbl, flex = rl_label(rl5_pct, rl5_left, rl5_reset, rich)
+            return action("usage", rate_single(rl5_pct, 2 * rl_len + 1 + flex, lbl,
+                                               RL_5H_FC, RL_5H_EC, name))
+        lbl, flex = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
+        return action("usage", rate_single(rl7_pct, 2 * rl_len + 1 + flex, lbl,
+                                           RL_7D_FC, RL_7D_EC))
 
     def lines_seg():
         return action("diff", "{}+{}{}{}/{}{}-{}{}".format(

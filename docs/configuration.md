@@ -25,6 +25,7 @@ Set these in the `env` block of `~/.claude/settings.json`:
 | `RETRO_HUD_CACHE_DIR` | `~/.cache/retro-hud` | where the per-session state, events and hook files live (falls back to `/tmp/retro-hud-<uid>` without a usable home). `presence-hook.sh` honours it too |
 | `RETRO_HUD_COST_MODE` | `cycle` | `cycle`: duration and cost share one field, alternating every 30s and padded to the wider label so the flip moves nothing; `both`: two segments (`T:…` and `$…`) |
 | `RETRO_HUD_RL_MODE` | `cycle` | rate-limit labels *below* the pin threshold: `cycle` (alternate % ↔ time-to-reset every 30s, every 10s in the red zone), `pct`, `time`, or `both` |
+| `RETRO_HUD_LIMIT_FILE` | `<cache>/limit.json` | one more limit for the gauge, from a file your own tooling writes: `{"label": "fable", "used_percentage": 71, "resets_at": <epoch>}` (`resets_at` optional; the label is cut to 8 characters of `A-Z a-z 0-9 . _ -`, `extra` without one). It takes the 5h half when the payload has no 5h window, and is a gauge of its own when the payload has no window at all. Ignored when older than an hour, past its `resets_at`, or not an absolute path. Read only: the HUD fetches nothing |
 | `RETRO_HUD_COUNTDOWN_PCT` | `70` | usage % where the label stops rotating and pins the combined `81% · 3d`; defaults to the amber zone |
 | `RETRO_HUD_CTX_TOKENS` | `auto` | context token readout: `auto` (amber zone up), `always`, `never` |
 | `RETRO_HUD_MARGIN` | `4` | columns kept free at the right edge (Claude Code's prompt footer insets the status line by 4) |

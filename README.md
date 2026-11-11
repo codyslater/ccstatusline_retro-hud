@@ -57,7 +57,7 @@ To remove: `bash uninstall.sh`.
 |---------|-----------|---------|
 | Context gauge | $\color{#00ff00}{\textsf{green}}$ / $\color{#ff8700}{\textsf{amber}}$ / $\color{#ff0000}{\textsf{red}}$ zoned track with fractional fill, `72%` | always |
 | Context tokens | `144.2K/200K` (or `/1M`) | from the amber zone up, when headroom is an actionable number (`RETRO_HUD_CTX_TOKENS=always\|never` to pin) |
-| Rate limits | mirrored gauges, $\color{#0087ff}{\textsf{blue}}$ 5h ←`██\|██`→ $\color{#af5fff}{\textsf{violet}}$ 7d | Claude subscription plans (hidden when the API reports none) |
+| Rate limits | mirrored gauges, $\color{#0087ff}{\textsf{blue}}$ 5h ←`██\|██`→ $\color{#af5fff}{\textsf{violet}}$ 7d | Claude subscription plans (hidden when the API reports none; a window the payload does not carry is not drawn, and the other takes the whole gauge) |
 | Lines changed | `+1447/-455` — $\color{#00ff00}{\textsf{green}}$ / $\color{#ff0000}{\textsf{red}}$ | when nonzero |
 | Cache hit rate | `cache 94%` in $\color{#00ffff}{\textsf{cyan}}$ | terminals ≥ 140 cols |
 | Duration ↔ cost | one field alternating every 30s: `1h` in $\color{#ff0087}{\textsf{pink}}$ ↔ `$41` in $\color{#ffff00}{\textsf{yellow}}$, both rounded hard (whole hours, minutes to 5; two significant figures of cost), so the flip moves its neighbours by a cell at most; no padding (`RETRO_HUD_COST_MODE=both` for two segments) | always; cost alone on narrow terminals |
@@ -77,6 +77,28 @@ the pinned `% · countdown` is the **last** thing row 2 sheds as the terminal
 narrows, after the cache readout, token counts, diff stat, agent name, and
 session duration. Each gauge escalates independently, so a calm limit keeps
 cycling beside a warning one.
+
+**One window, or one of your own.** Claude Code sends each window only
+when the account has it: with no 5h limit there is just the weekly one,
+and it gets the whole gauge, `████████▎ 93% · 7h29m` (violet while calm,
+as in its half of the mirror). On an account that does have a 5h limit,
+Claude Code leaves that window out of some refreshes and drops it when it
+resets: the state file remembers the last one (`rl5`), so its half stays,
+at its last reading until the reset and empty for five hours after.
+The free half can show one more limit that Claude Code does not send (a
+per-model weekly cap, a team budget): have your own tooling write
+
+```json
+{"label": "fable", "used_percentage": 71, "resets_at": 1794387600}
+```
+
+to `~/.cache/retro-hud/limit.json` (`RETRO_HUD_LIMIT_FILE` for another
+path) and it stands where the 5h gauge would, named:
+`fable 3d · 71% ▉██|██▊ 93% · 7h29m`. `resets_at` is optional; the label
+is cut to 8 plain characters. A real 5h window keeps its place, a file
+older than an hour or past its reset is ignored, and with no window at all
+the file's limit is a gauge on its own. The HUD only reads the file: it
+fetches nothing, so where the number comes from is up to the writer.
 
 ### Agent presence
 

@@ -4,6 +4,28 @@ All notable changes to retro-hud are documented here.
 Versioning follows [Semantic Versioning](https://semver.org) with `v`-prefixed
 tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 
+## [Unreleased]
+
+### Added
+- **One more limit, from a file.** `~/.cache/retro-hud/limit.json`
+  (`RETRO_HUD_LIMIT_FILE`), written by your own tooling as `{"label":
+  "fable", "used_percentage": 71, "resets_at": <epoch>}`, shows a limit
+  Claude Code does not send (a per-model weekly cap, a budget). It stands
+  in the 5h half, named, when the payload has no 5h window, and is a gauge
+  of its own when the payload has none at all; it counts toward the
+  creature's alarm like any limit. A file older than an hour or past its
+  reset is ignored. The HUD only reads it and fetches nothing.
+
+### Changed
+- **A window the payload does not carry is not drawn.** An account with no
+  5h limit sends only `seven_day`: the gauge used to keep a dead `0%` half
+  beside it. The window that is there now takes the whole gauge, in its
+  own colour, and a `rate_limits` with no window shows no gauge. A 5h
+  window the session has shown is remembered in the state file (`rl5`), so
+  a refresh that leaves it out does not flip the layout: its half stays, at
+  the last reading until it resets and empty for five hours after. With
+  presence off there is no state file, and the gauge follows the payload.
+
 ## [v3.3.0] — 2026-11-10
 
 ### Added

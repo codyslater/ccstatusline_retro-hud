@@ -286,6 +286,61 @@ class TestContent(unittest.TestCase):
         self.assertNotIn("|", plain)
         self.assertEqual(plain.count("%"), 1)  # only the context gauge
 
+    # ── one window, or none: the gauge is what the payload has ──
+    WEEK = {"seven_day": {"used_percentage": 93, "resets_at": NOW + 26940}}
+
+    def gauge_row(self, limits, cols=160, now=NOW, base=MINIMAL):
+        payload = copy.deepcopy(base)
+        payload["rate_limits"] = copy.deepcopy(limits)
+        return sl.render(payload, cols, now)[1]
+
+    def test_a_lone_window_takes_the_whole_gauge(self):
+        both = sl.strip_ansi(self.gauge_row(dict(self.WEEK, five_hour={"used_percentage": 37, "resets_at": NOW + 7200})))
+        self.assertIn("|", both)
+        row = self.gauge_row(self.WEEK)
+        plain = sl.strip_ansi(row)
+        self.assertNotIn("|", plain)                    # no divider, no dead half
+        self.assertEqual(plain.count("%"), 2)           # the context gauge's and the week's: no "0%" for a 5h
+        self.assertIn("93% · " + sl.fmt_countdown(26940), plain)
+        self.assertIn(sl.value_color(93), row)          # hot: the value's colour
+        # the bar is the two halves and the divider: 2 x rl_len + 1 cells
+        cells = 2 * sl.clamp(160 // 40, 3, 6) + 1
+        self.assertRegex(plain, r"// [█▏▎▍▌▋▊▉ ]{%d} 93%%" % cells)
+        calm = self.gauge_row({"seven_day": {"used_percentage": 20, "resets_at": NOW + 26940}})
+        self.assertIn(sl.RL_7D_FC, calm)                # the weekly window keeps its violet
+        self.assertNotIn(sl.RL_5H_FC, calm)
+        five = self.gauge_row({"five_hour": {"used_percentage": 20, "resets_at": NOW + 7200}})
+        self.assertIn(sl.RL_5H_FC, five)                # and the 5h its blue
+        self.assertNotIn(sl.RL_7D_FC, five)
+        self.assertNotIn("|", sl.strip_ansi(five))
+
+    def test_no_window_in_rate_limits_hides_the_gauge(self):
+        for limits in ({}, {"spend_limit": {"used_percentage": 5}}, {"seven_day": {}},
+                       {"five_hour": {"used_percentage": None}, "seven_day": "x"},
+                       {"seven_day": {"used_percentage": True}}):
+            plain = sl.strip_ansi(self.gauge_row(limits))
+            self.assertNotIn("|", plain, limits)
+            self.assertEqual(plain.count("%"), 1, limits)   # only the context gauge
+
+    def test_a_lone_window_cycles_without_moving_the_row(self):
+        os.environ["RETRO_HUD_FRAME"] = "0"
+        try:
+            calm = {"seven_day": {"used_percentage": 9, "resets_at": NOW + 536400}}
+            a = sl.strip_ansi(self.gauge_row(calm, 220, NOW))
+            b = sl.strip_ansi(self.gauge_row(calm, 220, NOW + 30))
+            self.assertIn("9%", a)
+            self.assertIn(sl.fmt_countdown(536400 - 30), b)
+            self.assertEqual(sl.vwidth(a), sl.vwidth(b))
+        finally:
+            del os.environ["RETRO_HUD_FRAME"]
+
+    def test_one_window_fits_every_width(self):
+        for limits in (self.WEEK, {"five_hour": {"used_percentage": 99, "resets_at": NOW + 60}}):
+            for cols in range(40, 241, 7):
+                for now in (NOW, NOW + 30):
+                    for row in sl.render(dict(copy.deepcopy(FULL), rate_limits=limits), cols, now):
+                        self.assertLessEqual(sl.vislen(row), cols, (cols, limits))
+
     def test_percentages_clamped(self):
         rows = sl.render(copy.deepcopy(OVERLOAD), 200, NOW)
         plain = sl.strip_ansi(rows[1])
@@ -4289,6 +4344,173 @@ class TestCreatureByName(CreatureCase):
             for cols in (60, 120):
                 for row in sl.render(p, cols, NOW):
                     self.assertLessEqual(sl.vislen(row), cols)
+
+
+class TestLimitFile(PresenceCase):
+    """<cache>/limit.json (or RETRO_HUD_LIMIT_FILE): one more limit, written by
+    your own tooling, shown in the 5h half when the payload has no 5h window."""
+    WEEK = {"seven_day": {"used_percentage": 40, "resets_at": NOW + 200000}}
+
+    def tearDown(self):
+        os.environ.pop("RETRO_HUD_LIMIT_FILE", None)
+        super().tearDown()
+
+    def put_limit(self, doc, age=0, path=None):
+        path = path or os.path.join(self.cache, "limit.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(doc if isinstance(doc, str) else json.dumps(doc))
+        os.utime(path, (NOW - age, NOW - age))
+        return path
+
+    def row2(self, limits=WEEK, cols=160, now=NOW):
+        p = self.payload()
+        if limits is not None:
+            p["rate_limits"] = copy.deepcopy(limits)
+        return sl.strip_ansi(sl.render(p, cols, now)[1])
+
+    FABLE = {"label": "fable", "used_percentage": 71, "resets_at": NOW + 300000}
+
+    def test_it_fills_the_empty_5h_half_with_its_name(self):
+        self.put_limit(self.FABLE)
+        plain = self.row2()
+        self.assertIn("fable " + sl.fmt_countdown(300000) + " · 71% ", plain)   # pinned: the % touches its bar
+        self.assertIn("|", plain)
+        self.assertIn(" 40%", plain)
+        self.assertEqual(sl.limit_file(NOW), {"label": "fable", "pct": 71, "reset": NOW + 300000})
+
+    def test_a_real_5h_window_keeps_its_place(self):
+        self.put_limit(self.FABLE)
+        both = dict(self.WEEK, five_hour={"used_percentage": 12, "resets_at": NOW + 7200})
+        plain = self.row2(both)
+        self.assertNotIn("fable", plain)
+        self.assertIn("12%", plain)
+
+    def test_alone_it_is_a_named_gauge(self):
+        self.put_limit(self.FABLE)
+        for limits in (None, {}):            # no rate_limits at all, or none of the windows
+            plain = self.row2(limits)
+            self.assertNotIn("|", plain)
+            self.assertRegex(plain, r"fable [█▏▎▍▌▋▊▉ ]+ 71% · " + re.escape(sl.fmt_countdown(300000)))
+
+    def test_stale_expired_or_junk_files_are_ignored(self):
+        clean = self.row2()
+        self.put_limit(self.FABLE, age=sl.LIMIT_FRESH_S + 5)
+        self.assertEqual(self.row2(), clean)                      # its writer is gone
+        self.put_limit(dict(self.FABLE, resets_at=NOW - 5))
+        self.assertEqual(self.row2(), clean)                      # that window is over
+        for junk in ("", "not json", "[1, 2]", json.dumps({"label": "fable"}),
+                     json.dumps({"label": "fable", "used_percentage": True}),
+                     json.dumps({"label": "fable", "used_percentage": "71"}),
+                     json.dumps({"label": "fable", "used_percentage": -3}),
+                     json.dumps({"label": "fable", "used_percentage": float("nan")})):
+            self.put_limit(junk)
+            self.assertEqual(self.row2(), clean, junk)
+        self.assertIsNone(sl.limit_file(NOW))
+
+    def test_the_label_is_a_short_plain_word(self):
+        self.put_limit({"label": "\x1b[31mweekly fable usage!\x07", "used_percentage": 5})
+        self.assertEqual(sl.limit_file(NOW)["label"], "31mweekl")     # 8 plain characters at most
+        self.assertNotIn("\x1b", sl.render(dict(self.payload(), rate_limits=self.WEEK), 160, NOW)[1].replace("\x1b[", "").replace("\x1b]8", "").replace("\x1b\\", ""))
+        for label in (None, 7, "", " ", "###", ["a"]):
+            self.put_limit({"label": label, "used_percentage": 5})
+            self.assertEqual(sl.limit_file(NOW)["label"], "extra", repr(label))
+        self.put_limit({"label": "opus", "used_percentage": 5})       # no resets_at: just the %
+        self.assertIn("opus 5% ", self.row2())
+
+    def test_the_file_can_live_elsewhere(self):
+        other = self.put_limit(self.FABLE, path=os.path.join(self.tmp, "x", "fable.json"))
+        self.assertNotIn("fable", self.row2())
+        os.environ["RETRO_HUD_LIMIT_FILE"] = other
+        self.assertIn("fable", self.row2())
+        os.environ["RETRO_HUD_LIMIT_FILE"] = "relative/limit.json"    # not an absolute path: ignored
+        self.assertNotIn("fable", self.row2())
+
+    def test_a_hot_extra_limit_alarms_like_any_other(self):
+        self.put_limit(dict(self.FABLE, used_percentage=96))
+        p = self.payload()
+        p["rate_limits"] = copy.deepcopy(self.WEEK)
+        rows = sl.render(p, 160, NOW)
+        self.assertIn("\\o.o/", sl.strip_ansi(rows[0]))              # the red-zone alien
+        self.assertIn(sl.value_color(96), rows[1])
+
+    def test_it_fits_every_width(self):
+        self.put_limit(dict(self.FABLE, label="fablefab", used_percentage=96))
+        for limits in (self.WEEK, None):
+            for cols in range(40, 241, 7):
+                for now in (NOW, NOW + 30):
+                    p = self.payload(FULL)
+                    p.pop("rate_limits", None)
+                    if limits is not None:
+                        p["rate_limits"] = copy.deepcopy(limits)
+                    for row in sl.render(p, cols, now):
+                        self.assertLessEqual(sl.vislen(row), cols, (cols, limits))
+
+
+class TestGaugeMemory(PresenceCase):
+    """Claude Code may leave a still-open 5h window out of a refresh, and drops
+    it once it resets: the session's state file remembers the last one, so the
+    mirrored gauge does not flip to the one-window layout and back."""
+    BOTH = {"five_hour": {"used_percentage": 40, "resets_at": NOW + 3000},
+            "seven_day": {"used_percentage": 20, "resets_at": NOW + 200000}}
+    WEEK = {"seven_day": {"used_percentage": 20, "resets_at": NOW + 200000}}
+
+    def tearDown(self):
+        os.environ.pop("RETRO_HUD_RL_MODE", None)
+        super().tearDown()
+
+    def row2(self, limits, now=NOW):
+        p = self.payload()
+        p["rate_limits"] = copy.deepcopy(limits)
+        return sl.strip_ansi(sl.render(p, 160, now)[1])
+
+    def test_an_omitted_5h_window_keeps_its_half(self):
+        os.environ["RETRO_HUD_RL_MODE"] = "pct"
+        self.tx(user(NOW - 9), asst(NOW - 2))
+        seen = self.row2(self.BOTH)
+        self.assertIn("40%", seen)
+        self.assertEqual(self.state_file()["rl5"], {"pct": 40, "reset": NOW + 3000})
+        kept = self.row2(self.WEEK, NOW + 10)                       # left out while still open
+        self.assertIn("|", kept)
+        self.assertIn("40%", kept)
+        self.assertEqual(self.state_file()["rl5"], {"pct": 40, "reset": NOW + 3000})
+        over = self.row2(self.WEEK, NOW + 3010)                     # reset, no new window yet: empty
+        self.assertIn("|", over)
+        self.assertNotIn("40%", over)
+        self.assertRegex(over, r"// 0% +\|")
+        gone = self.row2(self.WEEK, NOW + 3000 + sl.RL5_KEEP_S + 10)  # a window's length later: no 5h limit
+        self.assertNotIn("|", gone)
+        self.assertNotIn("rl5", self.state_file())
+        back = self.row2(self.BOTH, NOW + 3000 + sl.RL5_KEEP_S + 20)
+        self.assertIn("|", back)
+
+    def test_a_remembered_5h_window_keeps_the_limit_file_out(self):
+        os.environ["RETRO_HUD_RL_MODE"] = "pct"
+        self.tx(user(NOW - 9), asst(NOW - 2))
+        path = os.path.join(self.cache, "limit.json")
+        self.row2(self.BOTH)
+        with open(path, "w") as f:
+            json.dump({"label": "fable", "used_percentage": 71}, f)
+        os.utime(path, (NOW, NOW))
+        self.assertNotIn("fable", self.row2(self.WEEK, NOW + 10))
+        late = NOW + 3000 + sl.RL5_KEEP_S + 10
+        os.utime(path, (late, late))
+        self.assertIn("fable 71% ", self.row2(self.WEEK, late))
+
+    def test_without_a_state_file_the_gauge_follows_the_payload(self):
+        self.assertIn("|", self.row2(self.BOTH))            # no transcript: nothing is written
+        self.assertFalse(os.path.exists(self.path(".state.json")))
+        self.assertNotIn("|", self.row2(self.WEEK, NOW + 10))
+        # a window with no reset time cannot be kept: nothing says when it is over
+        self.tx(user(NOW - 9), asst(NOW - 2))
+        self.row2({"five_hour": {"used_percentage": 40}, "seven_day": {"used_percentage": 20}})
+        self.assertNotIn("rl5", self.state_file())
+        self.assertNotIn("|", self.row2(self.WEEK, NOW + 10))
+        for junk in (7, "x", [], {"pct": "40", "reset": NOW + 3000}, {"pct": 40}, {"pct": True, "reset": NOW + 3000},
+                     {"pct": 40, "reset": float("nan")}):
+            self.put_state(rl5=junk)
+            self.assertNotIn("|", sl.strip_ansi(sl.render(dict(self.payload(), rate_limits=self.WEEK,
+                                                                 transcript_path=""), 160, NOW)[1]), repr(junk))
 
 
 class TestSessionsSegment(PresenceCase):
