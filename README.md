@@ -430,7 +430,8 @@ you already run (an `ssh` in a cron, `rsync`, a mount):
 `state` is one of the creature's words (`working`, `yours`, `needs`,
 `idle`, `asleep`, `error`) or `paused`; `since` (epoch seconds) gives the
 age. The rows read `⌁ lab:train   needs you 2m`, count in `▣`/`⚑`, and a
-click runs `ssh -t -- lab tmux attach -t train` in a wrapper tmux session
+click runs `ssh -t -- lab "tmux attach -t '=train'"` (the `=`: that exact
+session, never one whose name merely starts so) in a wrapper tmux session
 here (`rh-lab-train`) and switches to it; when ssh ends the wrapper
 closes. Another way in goes in your own config, never in the feed
 (`RETRO_HUD_REMOTE_OPEN='mosh {host} -- tmux a -t {name}'` in

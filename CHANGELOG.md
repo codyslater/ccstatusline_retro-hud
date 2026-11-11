@@ -21,6 +21,21 @@ tags from v2.0.0 onward (earlier releases were tagged `1.0`–`1.3`).
 - The creature of a session you had already named changes once, to its
   name's.
 
+### Fixed
+- **`⌂`, `↩` and the session list are no longer refused on a bar drawn by
+  another machine.** Seen through a remote wrapper session, the bar's
+  links carry the other machine's tmux socket, which the handler rejected
+  as a bad socket. An action that targets no pane now falls back to the
+  default tmux server here (a pane action is refused as before).
+- **A remote row opens that exact session.** The default open command is
+  now `ssh -t -- {host} "tmux attach -t '={name}'"`: without the `=`, tmux
+  matched by prefix and could attach `dev2` for a `dev` that had gone.
+- **A `user@host` row in the session list can be clicked.** The feed
+  allowed `@` in a host or session name, but the menu item's own link
+  failed the handler's URL check.
+- Tests: the fake `claude` process is a copy of bash, so the suite passes
+  where `sleep` is a multicall binary.
+
 ## [v3.2.0] — 2026-10-28
 
 ### Added

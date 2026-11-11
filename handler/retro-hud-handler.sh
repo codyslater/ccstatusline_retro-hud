@@ -608,7 +608,7 @@ fi
 # ── URL form ──
 [ $# -eq 1 ] || reject "expected one argument, got $#"
 URL=$1
-re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent|card|sessions|needs|switch|home|back)(\?([A-Za-z0-9_=&%.:/~+-]*))?$'
+re='^retro-hud://(model|effort|ctx|cost|diff|usage|agent|card|sessions|needs|switch|home|back)(\?([A-Za-z0-9_=&%.:/~+@-]*))?$'
 [[ $URL =~ $re ]] || reject "$(printf '%q' "$URL")"
 ACTION=${BASH_REMATCH[1]}
 QUERY=${BASH_REMATCH[3]}
@@ -643,7 +643,15 @@ if [ "$need_pane" = 1 ] || [ -n "$PANE" ]; then
     [[ $PANE =~ ^%[0-9]+$ ]] || reject "$ACTION: bad pane $(printf '%q' "$PANE")"
 fi
 if [ "$has_sock" = 1 ]; then
-    safe_path "$SOCK" && [ -S "$SOCK" ] || reject "$ACTION: bad sock $(printf '%q' "$SOCK")"
+    safe_path "$SOCK" || reject "$ACTION: bad sock $(printf '%q' "$SOCK")"
+    if [ ! -S "$SOCK" ]; then
+        # A bar drawn on another machine (seen through a remote wrapper
+        # session) names that machine's socket. An action that targets no
+        # pane is as good without one: the tmux server here, as for a bare link.
+        [ "$need_pane" = 0 ] || reject "$ACTION: bad sock $(printf '%q' "$SOCK")"
+        log "$ACTION: sock $SOCK is not a socket here; using the default server"
+        SOCK="" has_sock=0
+    fi
 fi
 if [ -n "$CUR" ]; then
     valid_level "$CUR" || reject "$ACTION: bad cur $(printf '%q' "$CUR")"
@@ -971,7 +979,9 @@ remote_open() {  # host name: the wrapper session's name on stdout, or nothing
     local host=$1 name=$2 cmd w
     [[ $host =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$ && $name =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$ ]] || return 1
     cmd=${RETRO_HUD_REMOTE_OPEN:-$cfg_remote_open}
-    [ -n "$cmd" ] || cmd='ssh -t -- {host} tmux attach -t {name}'
+    # the default asks for the exact name (=): a bare -t would prefix-match and
+    # attach dev_x2 for a dev_x that is gone; quoted for the far shell
+    [ -n "$cmd" ] || cmd="ssh -t -- {host} \"tmux attach -t '={name}'\""
     cmd=${cmd//\{host\}/$host}
     cmd=${cmd//\{name\}/$name}
     w="rh-$host-$name"
