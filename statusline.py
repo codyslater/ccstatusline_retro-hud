@@ -23,12 +23,6 @@ Env toggles:
                                  cycle (alternate % and time-to-reset every
                                  30s, every 10s in the red zone), pct, time,
                                  or both
-    RETRO_HUD_LIMIT_FILE=<path>  one more limit for the gauge, from a file
-                                 your own tooling writes (default
-                                 <cache>/limit.json): {"label": "fable",
-                                 "used_percentage": 71, "resets_at": <epoch>}.
-                                 It takes the 5h half when the payload has
-                                 no 5h window; ignored when older than 1h
     RETRO_HUD_ALIEN=0            ground the creature (or alien) that walks
                                  the top rule (a tall head line stays, blank)
     RETRO_HUD_CTX_TOKENS=auto    context token readout: auto (amber zone up),
@@ -583,7 +577,7 @@ def value_color(pct):
     return NEON_RED
 
 
-def rate_mirror(pct_5h, pct_7d, len_5h, len_7d, lbl_5h, lbl_7d, name_5h=""):
+def rate_mirror(pct_5h, pct_7d, len_5h, len_7d, lbl_5h, lbl_7d):
     """5h gauge fills right-to-left, 7d left-to-right, meeting at center.
 
     Bar lengths are per-side: in cycle mode each gauge stretches to absorb
@@ -613,22 +607,18 @@ def rate_mirror(pct_5h, pct_7d, len_5h, len_7d, lbl_5h, lbl_7d, name_5h=""):
         right += "{}{}{}{}".format(bg_7d, fc_7d, _FRAC[frac], R)
     right += "{}{}{} {}{}{}".format(bg_7d, " " * empty, R, fc_7d, lbl_7d, R)
 
-    if name_5h:  # a limit from RETRO_HUD_LIMIT_FILE in the 5h half: say whose it is
-        left = "{}{}{} {}".format(DIM, name_5h, R, left)
     return "{}{}|{}{}".format(left, DIM, R, right)
 
 
-def rate_single(pct, length, lbl, fc_calm, ec, name=""):
+def rate_single(pct, length, lbl, fc_calm, ec):
     """One window on its own: a left-to-right bar `length` cells long in
-    that window's colours, its label after it, `name` (a limit file's
-    label) before it."""
+    that window's colours, its label after it."""
     fc = value_color(pct) if pct >= WARN_PCT else fc_calm
     bg = ec.replace("38;5;", "48;5;")
     units = clamp(pct, 0, 100) * length * 8 // 100
     full, frac = units // 8, units % 8
     empty = length - full - (1 if frac else 0)
-    out = "{}{}{} ".format(DIM, name, R) if name else ""
-    out += "{}{}{}".format(fc, _FULL * full, R)
+    out = "{}{}{}".format(fc, _FULL * full, R)
     if frac:
         out += "{}{}{}{}".format(bg, fc, _FRAC[frac], R)
     return out + "{}{}{} {}{}{}".format(bg, " " * empty, R, fc, lbl, R)
@@ -1151,43 +1141,6 @@ def remembered_5h(data, now):
     if not d:
         return None
     return _kept_5h(_read_json(os.path.join(d, sid + ".state.json")).get("rl5"), now)
-
-
-LIMIT_FRESH_S = 3600   # a limit file older than this is ignored: its writer is gone
-_LIMIT_LABEL_JUNK = re.compile(r"[^A-Za-z0-9._-]")
-
-
-def limit_file(now):
-    """One more limit for the gauge, from a file your own tooling writes:
-    RETRO_HUD_LIMIT_FILE (an absolute path), else <cache>/limit.json, as
-    {"label": "fable", "used_percentage": 71, "resets_at": <epoch>}.
-    Returns {"label", "pct", "reset"}, or None without a usable file:
-    missing, older than LIMIT_FRESH_S, no number in it, or a window that
-    has already reset. The label is cut to 8 plain characters ("extra"
-    when it has none). Nothing in the file is run, and nothing is fetched:
-    where the number comes from is the writer's business."""
-    path = os.environ.get("RETRO_HUD_LIMIT_FILE", "")
-    if not path:
-        c = cache_dir(create=False)
-        path = os.path.join(c, "limit.json") if c else ""
-    if not os.path.isabs(path):
-        return None
-    try:
-        if now - os.path.getmtime(path) > LIMIT_FRESH_S:
-            return None
-    except OSError:
-        return None
-    doc = _read_json(path)
-    pct = doc.get("used_percentage")
-    if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not 0 <= pct < 1e6:
-        return None
-    reset = doc.get("resets_at")
-    reset = int(reset) if _num_or_none(reset) is not None and 0 < reset < 1e12 else 0
-    if reset and reset <= now:
-        return None
-    label = doc.get("label")
-    label = _LIMIT_LABEL_JUNK.sub("", label)[:8] if isinstance(label, str) else ""
-    return {"label": label or "extra", "pct": int(pct), "reset": reset}
 
 
 _FEED_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,63}$")   # = the handler's rule
@@ -2803,15 +2756,9 @@ def render(data, cols, now, _edges=True):
     # Each window may be absent on its own (an account with no 5h limit sends
     # only seven_day): only what is there is drawn, except that a 5h window
     # this session has shown keeps its half through the refreshes that leave
-    # it out. The 5h half, when free, takes the limit your own tooling wrote
-    # to RETRO_HUD_LIMIT_FILE.
+    # it out.
     w5 = rate_window(dig(data, "rate_limits", "five_hour")) or remembered_5h(data, now)
     w7 = rate_window(dig(data, "rate_limits", "seven_day"))
-    rl5_name = ""
-    if not w5:
-        extra = limit_file(now)
-        if extra:
-            w5, rl5_name = (extra["pct"], extra["reset"]), extra["label"]
     has_rl = bool(w5 or w7)
     rl5_pct, rl5_reset = w5 or (0, 0)
     rl7_pct, rl7_reset = w7 or (0, 0)
@@ -2981,17 +2928,16 @@ def render(data, cols, now, _edges=True):
         return shown, max(vwidth(other) - vwidth(shown), 0)
 
     def rl_seg(rich):
-        name = rl5_name if rich else ""  # the narrowest rows keep the numbers, not the name
         if w5 and w7:
             l5, flex5 = rl_label(rl5_pct, rl5_left, rl5_reset, rich, mirror=True)
             l7, flex7 = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
             return action("usage", rate_mirror(rl5_pct, rl7_pct, rl_len + flex5,
-                                               rl_len + flex7, l5, l7, name))
+                                               rl_len + flex7, l5, l7))
         # one window: the whole gauge (both halves and the divider's cell)
         if w5:
             lbl, flex = rl_label(rl5_pct, rl5_left, rl5_reset, rich)
             return action("usage", rate_single(rl5_pct, 2 * rl_len + 1 + flex, lbl,
-                                               RL_5H_FC, RL_5H_EC, name))
+                                               RL_5H_FC, RL_5H_EC))
         lbl, flex = rl_label(rl7_pct, rl7_left, rl7_reset, rich)
         return action("usage", rate_single(rl7_pct, 2 * rl_len + 1 + flex, lbl,
                                            RL_7D_FC, RL_7D_EC))

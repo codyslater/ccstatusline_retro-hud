@@ -78,27 +78,13 @@ narrows, after the cache readout, token counts, diff stat, agent name, and
 session duration. Each gauge escalates independently, so a calm limit keeps
 cycling beside a warning one.
 
-**One window, or one of your own.** Claude Code sends each window only
+**One window.** Claude Code sends each window only
 when the account has it: with no 5h limit there is just the weekly one,
 and it gets the whole gauge, `████████▎ 93% · 7h29m` (violet while calm,
 as in its half of the mirror). On an account that does have a 5h limit,
 Claude Code leaves that window out of some refreshes and drops it when it
 resets: the state file remembers the last one (`rl5`), so its half stays,
 at its last reading until the reset and empty for five hours after.
-The free half can show one more limit that Claude Code does not send (a
-per-model weekly cap, a team budget): have your own tooling write
-
-```json
-{"label": "fable", "used_percentage": 71, "resets_at": 1794387600}
-```
-
-to `~/.cache/retro-hud/limit.json` (`RETRO_HUD_LIMIT_FILE` for another
-path) and it stands where the 5h gauge would, named:
-`fable 3d · 71% ▉██|██▊ 93% · 7h29m`. `resets_at` is optional; the label
-is cut to 8 plain characters. A real 5h window keeps its place, a file
-older than an hour or past its reset is ignored, and with no window at all
-the file's limit is a gauge on its own. The HUD only reads the file: it
-fetches nothing, so where the number comes from is up to the writer.
 
 ### Agent presence
 
