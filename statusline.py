@@ -111,7 +111,7 @@ its own, a window the payload does not carry is not drawn (the other
 takes the whole gauge; with neither there is none), and the pinned label is the last thing row 2 gives up when the
 terminal narrows, so neither number flickers away under you.
 """
-__version__ = "3.4.0"
+__version__ = "3.4.1"
 
 import calendar
 import json
